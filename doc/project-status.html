@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Razer Phone 2 Linux — 專案狀態</title>
+<style>
+  body { font-family: 'Segoe UI', sans-serif; background: #1e1e1e; color: #d4d4d4; margin: 0; padding: 24px; line-height: 1.6; }
+  h1 { color: #4ec9b0; border-bottom: 2px solid #4ec9b0; padding-bottom: 8px; }
+  h2 { color: #9cdcfe; margin-top: 32px; border-left: 4px solid #9cdcfe; padding-left: 12px; }
+  h3 { color: #ce9178; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+  th { background: #2d2d2d; color: #4ec9b0; padding: 8px 12px; text-align: left; border: 1px solid #444; }
+  td { padding: 7px 12px; border: 1px solid #444; }
+  tr:nth-child(even) td { background: #252525; }
+  code { background: #2d2d2d; color: #ce9178; padding: 2px 6px; border-radius: 3px; font-family: 'Cascadia Code', monospace; }
+  pre { background: #2d2d2d; padding: 14px; border-radius: 6px; overflow-x: auto; }
+  pre code { background: none; padding: 0; color: #d4d4d4; }
+  .ok { color: #4ec9b0; } /* ✅ */
+  .fail { color: #f44747; } /* ❌ */
+  .warn { color: #dcdcaa; } /* ⚠️ */
+  .tag { display: inline-block; background: #264f78; color: #9cdcfe; padding: 1px 8px; border-radius: 12px; font-size: 0.82em; margin-right: 4px; }
+  .tag.red { background: #5a1d1d; color: #f44747; }
+  .tag.green { background: #1e3a2a; color: #4ec9b0; }
+  .tag.yellow { background: #3a3500; color: #dcdcaa; }
+  .section-box { background: #252525; border: 1px solid #3a3a3a; border-radius: 8px; padding: 16px; margin: 16px 0; }
+  ul li { margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<h1>🐧 Razer Phone 2 (SDM845) — 主線 Linux 專案狀態</h1>
+<p style="color:#888">最後更新：2026-05-12　|　Kernel: <code>6.16.0-rc2-sdm845-ged6098a37a4c-dirty</code>　|　OS: Ubuntu 24.04 Noble ARM64</p>
+
+<!-- ===== 裝置資訊 ===== -->
+<h2>📱 裝置資訊</h2>
+<table>
+  <tr><th>項目</th><th>值</th></tr>
+  <tr><td>型號</td><td>Razer Phone 2 (codename <code>aura</code>)</td></tr>
+  <tr><td>SoC</td><td>Qualcomm SDM845</td></tr>
+  <tr><td>顯示</td><td>NovaTeK NT36830 (dual DSI, DSC, 1440×2560, 120Hz)</td></tr>
+  <tr><td>WiFi</td><td>WCN3990 (SNOC bus, <code>18800000.wifi</code>, ath10k_snoc)</td></tr>
+  <tr><td>根文件系統</td><td>Ubuntu 24.04.4 Noble ARM64（刷入 userdata 分區）</td></tr>
+  <tr><td>登入帳號</td><td>klipper / klipper（sudo 密碼同）</td></tr>
+</table>
+
+<!-- ===== 連線方式 ===== -->
+<h2>🔌 連線方式</h2>
+<div class="section-box">
+  <h3>USB NCM (主要方式)</h3>
+  <p>手機透過 USB Composite Gadget 提供 NCM 網路介面，AP 端 IP: <code>192.168.137.133</code></p>
+  <pre><code># SSH 連線 (金鑰認證)
+ssh -i $env:USERPROFILE\.ssh\razer-phone klipper@192.168.137.133
+
+# 多指令快速連線
+ssh -i "$env:USERPROFILE\.ssh\razer-phone" -o StrictHostKeyChecking=no klipper@192.168.137.133 "指令"</code></pre>
+
+  <h3>USB Serial (備用 / 早期 debug)</h3>
+  <p>Kernel 設定 <code>console=ttyGS0</code>，USB ACM gadget 掛載於 Windows 上的 COM 埠</p>
+
+  <h3>WiFi (目標，尚未完成)</h3>
+  <p>SSID: <code>CimforceTw-Guest</code>　密碼: <code>61828630</code>（ath10k_snoc 尚在 debug 中）</p>
+</div>
+
+<!-- ===== 刷機流程 ===== -->
+<h2>⚡ 刷機流程</h2>
+<div class="section-box">
+  <pre><code># 1. 進入 Fastboot
+adb reboot bootloader
+# 或 關機後按住 音量下 + 電源
+
+# 2. 停用 Verified Boot
+fastboot --disable-verity --disable-verification flash vbmeta vbmeta_disabled.img
+
+# 3. 刷入 Boot Image (kernel + initramfs)
+fastboot flash boot boot.img
+
+# 4. 刷入根文件系統 (⚠️ 會清除 userdata！)
+fastboot flash userdata rootfs-sparse.img
+
+# 5. 重啟
+fastboot reboot</code></pre>
+  <p><span class="warn">⚠️</span> 映像檔路徑: <code>output/boot.img</code>, <code>output/rootfs-sparse.img</code>, <code>output/vbmeta_disabled.img</code></p>
+</div>
+
+<!-- ===== WSL 目錄結構 ===== -->
+<h2>📂 WSL 專案目錄 (~/razorphone2linux)</h2>
+<div class="section-box">
+<table>
+  <tr><th>路徑</th><th>說明</th></tr>
+  <tr><td><code>kernel/linux/</code></td><td>SDM845 主線 kernel 原始碼（已套用 patch）</td></tr>
+  <tr><td><code>kernel/linux/.config</code></td><td>目前 kernel config（LOCALVERSION=-sdm845, QRTR=m, ATH10K_SNOC=m）</td></tr>
+  <tr><td><code>tqftpserv/</code></td><td>tqftpserv 原始碼（已編譯，ARM64 binary）</td></tr>
+  <tr><td><code>scripts/</code></td><td>構建腳本（build kernel、rootfs、boot image、flash）</td></tr>
+  <tr><td><code>wsl-scripts/</code></td><td>WSL 輔助腳本（extract firmware、check rootfs 等）</td></tr>
+  <tr><td><code>output/</code></td><td>產物：<code>boot.img</code>, <code>rootfs-sparse.img</code>, <code>Image.gz-dtb</code></td></tr>
+  <tr><td><code>dts/sdm845-razer-aura.dts</code></td><td>裝置樹主檔（source of truth）</td></tr>
+  <tr><td><code>android-fdt/</code></td><td>從 Android ROM 解出的 DTB/DTS（參考用）</td></tr>
+  <tr><td><code>panel-driver/panel-novatek-nt36830.c</code></td><td>NT36830 面板驅動（尚未 upstream）</td></tr>
+  <tr><td><code>doc/</code></td><td>文件（此頁面、sdm845 DTS 結構比較等）</td></tr>
+</table>
+
+<h3>裝置上的關鍵路徑 (phone: /)</h3>
+<table>
+  <tr><th>路徑</th><th>說明</th></tr>
+  <tr><td><code>/lib/firmware/qcom/sdm845/Razer/aura/</code></td><td>所有 modem/ADSP/WiFi 韌體</td></tr>
+  <tr><td><code>/lib/firmware/*.jsn</code></td><td>pd-mapper symlinks（adspr/adspua/cdspr/modemr/modemuw/slpir/slpius）</td></tr>
+  <tr><td><code>/readonly/firmware/image/wlanmdsp.mbn</code></td><td>WiFi modem 韌體（tqftpserv 提供）</td></tr>
+  <tr><td><code>/tmp/tqftpserv</code></td><td>已安裝的 tqftpserv binary</td></tr>
+  <tr><td><code>/usr/lib/aarch64-linux-gnu/libqrtr.so.1.1</code></td><td>tqftpserv runtime 依賴</td></tr>
+  <tr><td><code>/tmp/*.ko</code></td><td>手動載入的 kernel modules（qrtr, qcom_q6v5_mss, qcom_q6v5_pas 等）</td></tr>
+</table>
+</div>
+
+<!-- ===== 功能完成度 ===== -->
+<h2>✅ 功能完成度</h2>
+<table>
+  <tr><th>功能</th><th>狀態</th><th>說明</th></tr>
+  <tr><td>開機進 Linux</td><td><span class="ok">✅ 完成</span></td><td>Ubuntu 24.04 ARM64，SSH 可用</td></tr>
+  <tr><td>USB ACM (serial)</td><td><span class="ok">✅ 完成</span></td><td>ttyGS0 console</td></tr>
+  <tr><td>USB NCM (網路)</td><td><span class="ok">✅ 完成</span></td><td>192.168.137.133，SSH key auth</td></tr>
+  <tr><td>ADSP/CDSP</td><td><span class="ok">✅ 運行中</span></td><td>remoteproc1/2 RUNNING</td></tr>
+  <tr><td>WiFi (WCN3990)</td><td><span class="fail">❌ 進行中</span></td><td>modem root_pd 160ms crash loop</td></tr>
+  <tr><td>顯示 (NT36830)</td><td><span class="warn">⚠️ 未開始</span></td><td>dual DSI / DSC driver 尚未啟動</td></tr>
+  <tr><td>觸控 (Synaptics)</td><td><span class="warn">⚠️ 未開始</span></td><td>I2C-14, GPIO 31/32/44</td></tr>
+  <tr><td>GPU (Adreno 630)</td><td><span class="warn">⚠️ 未開始</span></td><td>需要 firmware blob</td></tr>
+</table>
+
+<!-- ===== WiFi Debug — 嘗試過的方向 ===== -->
+<h2>🔴 WiFi Debug — 嘗試過的失敗方向</h2>
+
+<div class="section-box">
+  <h3><span class="tag red">失敗 #1</span> 缺少 tqftpserv</h3>
+  <p>懷疑 WiFi modem (wlan_pd) 載入失敗是因為 AP 沒有提供 TFTP 服務。<br>
+  <strong>處理:</strong> 從 <code>andersson/tqftpserv</code> 建置 ARM64 binary，安裝到裝置，建立 <code>/readonly/firmware/image/wlanmdsp.mbn</code>。<br>
+  <strong>結果:</strong> tqftpserv 啟動成功（QRTR service 4096 可見），但 <span class="fail">從未收到任何 TFTP 請求</span>，modem 仍在 160ms crash。</p>
+
+  <h3><span class="tag red">失敗 #2</span> pd-mapper .jsn symlink 路徑錯誤</h3>
+  <p>pd-mapper 找不到 <code>*.jsn</code> 檔案（路徑不符合 qmi_instance_id）。<br>
+  <strong>處理:</strong> 在 <code>/lib/firmware/</code> 建立 7 個 symlink 指向正確路徑。<br>
+  <strong>結果:</strong> pd-mapper 正常啟動，modem 啟動速度提升（160ms crash），但 crash 問題未解決。</p>
+
+  <h3><span class="tag red">失敗 #3</span> 懷疑是 wlan_pd (modemuw.jsn) 問題</h3>
+  <p>Binary search：移除 <code>/lib/firmware/modemuw.jsn</code>，觀察 modem 是否因 wlan_pd 設定問題 crash。<br>
+  <strong>結果:</strong> 移除後 crash 時間、行為 <span class="fail">完全相同</span>（161ms）。<br>
+  <strong>結論: crash 在 modem root_pd，與 wlan_pd 無關。</strong></p>
+
+  <h3><span class="tag red">失敗 #4</span> 停用 pd-mapper</h3>
+  <p>懷疑 pd-mapper 回應觸發 crash。停用 pd-mapper 後再啟動 modem。<br>
+  <strong>結果:</strong> crash 時間 <span class="fail">完全相同</span>，pd-mapper 不是 crash 原因。</p>
+</div>
+
+<!-- ===== 目前已知事實 ===== -->
+<h2>🔍 目前已確認的事實</h2>
+<div class="section-box">
+<ul>
+  <li>Modem 啟動後約 <strong>160~170ms</strong> 發生 <code>fatal error without message</code>（不是 watchdog，是 modem 主動送出 fatal signal）</li>
+  <li>Modem 在 crash 前成功註冊了 <strong>service 66 (servreg)</strong> 和 <strong>service 43 (subsystem control)</strong> on node 0</li>
+  <li>Service 69 (WLFW/ath10k) <strong>從未出現</strong>，代表 wlan_pd ELF 根本還沒被載入</li>
+  <li>ADSP (node 5) 和 CDSP (node 10) 正常運行，問題只在 modem</li>
+  <li>韌體路徑正確（mba.mbn, modem.mbn 都能讀取）</li>
+  <li>Coredump 設定: <code>disabled</code>（<code>echo coredump</code> 回報 Invalid argument，無法取得 crash dump）</li>
+  <li><code>MBA booted without debug policy</code> = 正式版韌體，無 crash reason string</li>
+  <li>rmtfs 目前以 modemst1/modemst2 分區執行，但沒有 fsg overlay 檔案</li>
+</ul>
+</div>
+
+<!-- ===== 下一步方向 ===== -->
+<h2>🔎 待確認的方向</h2>
+<div class="section-box">
+<table>
+  <tr><th>優先級</th><th>方向</th><th>理由</th></tr>
+  <tr>
+    <td><span class="tag red">高</span></td>
+    <td>確認 rmtfs EFS mount 是否成功</td>
+    <td>Modem 在 root_pd init 時需要 EFS，rmtfs 沒有 fsg overlay 可能導致 NV 讀取失敗後 crash</td>
+  </tr>
+  <tr>
+    <td><span class="tag red">高</span></td>
+    <td>查看 IPC logging (<code>/sys/kernel/debug/ipc_logging/</code>)</td>
+    <td>Modem 可能透過 SMEM 留下內部 log，包含 crash 前的函式呼叫</td>
+  </tr>
+  <tr>
+    <td><span class="tag yellow">中</span></td>
+    <td>啟用 QCOM dynamic debug (<code>module qcom_q6v5_mss +p</code>)</td>
+    <td>可能暴露更多 MSS loader 的細節訊息</td>
+  </tr>
+  <tr>
+    <td><span class="tag yellow">中</span></td>
+    <td>啟動 SLPI (remoteproc3)</td>
+    <td>部分 modem firmware 依賴 SLPI sensor service</td>
+  </tr>
+  <tr>
+    <td><span class="tag">低</span></td>
+    <td>比對 Android kernel modem_q6v5 驅動差異</td>
+    <td>Android 可能對 MSA memory / clock / PIL 有額外設定</td>
+  </tr>
+</table>
+</div>
+
+<!-- ===== 服務啟動順序 ===== -->
+<h2>🚀 服務手動啟動順序</h2>
+<div class="section-box">
+<pre><code># 1. pd-mapper (通常已 systemd 自啟)
+sudo systemctl start pd-mapper
+
+# 2. rmtfs (EFS partition 服務)
+sudo rmtfs -P /dev/disk/by-partlabel/modemst1 \
+           -P /dev/disk/by-partlabel/modemst2 &
+
+# 3. tqftpserv (wlan_pd 韌體 TFTP)
+LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu /tmp/tqftpserv -d \
+    > /tmp/tqftpserv.log 2>&1 &
+
+# 4. Load kernel modules
+cd /tmp
+sudo insmod qrtr.ko; sudo insmod qrtr_smd.ko
+sudo insmod qcom_pil_info.ko; sudo insmod qcom_sysmon.ko
+sudo insmod qcom_q6v5.ko; sudo insmod qcom_mdt_loader.ko
+sudo insmod reset-qcom-pdc.ko; sudo insmod qcom_q6v5_pas.ko
+sudo insmod qcom_q6v5_mss.ko
+
+# 5. 啟動 modem
+echo start | sudo tee /sys/class/remoteproc/remoteproc0/state
+
+# 確認狀態
+qrtr-lookup
+cat /sys/class/remoteproc/remoteproc0/state</code></pre>
+</div>
+
+<hr style="border-color:#3a3a3a; margin-top:40px">
+<p style="color:#555; font-size:0.85em">Razer Phone 2 Linux Project — doc/project-status.html</p>
+
+</body>
+</html>

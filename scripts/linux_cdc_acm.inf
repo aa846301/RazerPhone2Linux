@@ -1,0 +1,45 @@
+; INF for Linux CDC-ACM USB serial (VID_0525/PID_A4A7 MI_00)
+; Installs usbser.sys for the ACM serial function
+
+[Version]
+Signature="$Windows NT$"
+Class=Ports
+ClassGuid={4D36E978-E325-11CE-BFC1-08002BE10318}
+Provider=%ManufacturerName%
+CatalogFile=linux_cdc_acm.cat
+DriverVer=05/11/2026,1.0.0.1
+
+[Manufacturer]
+%ManufacturerName%=Standard,NTamd64,NT
+
+[Standard.NTamd64]
+%DeviceName%=DriverInstall, USB\VID_0525&PID_A4A7&MI_00
+%DeviceName%=DriverInstall, USB\VID_0525&PID_A4A7
+
+[Standard.NT]
+%DeviceName%=DriverInstall, USB\VID_0525&PID_A4A7&MI_00
+%DeviceName%=DriverInstall, USB\VID_0525&PID_A4A7
+
+[DriverInstall]
+Include=mdmcpq.inf
+CopyFiles=FakeModemCopyFileSection
+AddReg=LowerFilterAddReg
+
+[DriverInstall.Services]
+Include=mdmcpq.inf
+AddService=usbser,,DriverService
+
+[DriverService]
+DisplayName=%ServiceName%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\usbser.sys
+
+[LowerFilterAddReg]
+HKR,,LowerFilters,0x00010000,"serenum"
+
+[Strings]
+ManufacturerName="Linux Foundation"
+DeviceName="Razer Phone 2 Linux Serial (ACM)"
+ServiceName="USB Serial Driver"

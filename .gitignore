@@ -1,0 +1,5 @@
+aura-p-release-3201-user-full.zip
+*.log
+.tmp/
+output/*.img
+*.img
