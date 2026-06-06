@@ -13,10 +13,11 @@
 
 set -euo pipefail
 
-WORKDIR="$HOME/razorphone2linux"
+WORKDIR="${RAZER_WORKDIR:-$HOME/razorphone2linux}"
 KERNEL_DIR="$WORKDIR/kernel/linux"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT_DIR="$WORKDIR/output"
+WIN_OUTPUT_DIR="/mnt/c/repo/razorphone2linux/output"
 
 export ARCH=arm64
 export CROSS_COMPILE=aarch64-linux-gnu-
@@ -113,6 +114,33 @@ else
 fi
 
 # -------------------------------------------------------
+# Step 3b: Apply repo-controlled kernel patches
+# -------------------------------------------------------
+echo "[3b/6] Applying repo-controlled kernel patches..."
+PATCH_DIR="$PROJECT_DIR/kernel-patches"
+if [ -d "$PATCH_DIR" ]; then
+    while IFS= read -r patch_file; do
+        patch_name="$(basename "$patch_file")"
+        if git -C "$KERNEL_DIR" apply --recount --reverse --check "$patch_file" >/dev/null 2>&1; then
+            echo "  $patch_name already applied."
+        elif [ "$patch_name" = "0001-razor-aura-mss-pdr-diagnostics.patch" ] &&
+             grep -q "sdm845 mss diag reset" "$KERNEL_DIR/drivers/remoteproc/qcom_q6v5_mss.c" &&
+             grep -q "PDM diag:" "$KERNEL_DIR/drivers/soc/qcom/qcom_pd_mapper.c"; then
+            echo "  $patch_name already applied (marker check)."
+        elif [ "$patch_name" = "0002-razor-aura-mss-crash-reason-deep-diagnostics.patch" ] &&
+             grep -q "q6v5_diag_dump_crash_smem" "$KERNEL_DIR/drivers/remoteproc/qcom_q6v5.c"; then
+            echo "  $patch_name already applied (marker check)."
+        else
+            git -C "$KERNEL_DIR" apply --recount --check "$patch_file"
+            git -C "$KERNEL_DIR" apply --recount "$patch_file"
+            echo "  Applied $patch_name"
+        fi
+    done < <(find "$PATCH_DIR" -maxdepth 1 -type f -name '*.patch' | sort)
+else
+    echo "  No kernel-patches directory."
+fi
+
+# -------------------------------------------------------
 # Step 4: Configure kernel
 # -------------------------------------------------------
 echo "[4/6] Configuring kernel..."
@@ -128,205 +156,54 @@ else
     exit 1
 fi
 
-# Apply additional config options for Razer Phone 2
-echo "Applying Razer Phone 2 config fragment..."
-cat > /tmp/razer_aura_fragment.config << 'CONFIG_EOF'
-# ============================================================
-# Razer Phone 2 (aura) kernel config fragment
-# ============================================================
+# Apply the single canonical config fragment.
+CONFIG_FRAGMENT="$PROJECT_DIR/config/razer-aura.config"
+if [ ! -f "$CONFIG_FRAGMENT" ]; then
+    echo "ERROR: missing canonical config fragment: $CONFIG_FRAGMENT"
+    exit 1
+fi
 
-# Platform
-CONFIG_ARCH_QCOM=y
+echo "Applying Razer Phone 2 config fragment: $CONFIG_FRAGMENT"
+sed 's/\r$//' "$CONFIG_FRAGMENT" > /tmp/razer_aura_fragment.config
+./scripts/kconfig/merge_config.sh -m .config /tmp/razer_aura_fragment.config
 
-# Display (simpledrm first; full MSM/NT36830 can load after userspace)
-CONFIG_DRM=y
-CONFIG_DRM_MSM=m
-CONFIG_DRM_PANEL_NOVATEK_NT36830=m
-CONFIG_DRM_DISPLAY_HELPER=y
-CONFIG_DRM_DISPLAY_DSC_HELPER=y
-CONFIG_BACKLIGHT_CLASS_DEVICE=y
-
-# Touchscreen (Synaptics RMI4)
-CONFIG_INPUT_TOUCHSCREEN=y
-CONFIG_RMI4_CORE=y
-CONFIG_RMI4_I2C=y
-CONFIG_RMI4_F01=y
-CONFIG_RMI4_F12=y
-
-# WiFi (WCN3990 via ath10k)
-CONFIG_CFG80211=y
-CONFIG_MAC80211=y
-CONFIG_ATH10K=y
-CONFIG_ATH10K_SNOC=y
-CONFIG_ATH10K_DEBUG=n
-
-# Bluetooth (WCN3990)
-CONFIG_BT=y
-CONFIG_BT_HCIUART=y
-CONFIG_BT_HCIUART_QCA=y
-
-# USB (DWC3 + Gadget for serial debug + Host for Klipper MCU)
-CONFIG_USB=y
-CONFIG_USB_DWC3=y
-CONFIG_USB_DWC3_QCOM=y
-CONFIG_USB_GADGET=y
-CONFIG_USB_CONFIGFS=y
-CONFIG_USB_CONFIGFS_ACM=y
-CONFIG_USB_CONFIGFS_SERIAL=y
-CONFIG_USB_G_SERIAL=m
-CONFIG_USB_ACM=y
-CONFIG_USB_SERIAL=y
-CONFIG_USB_SERIAL_GENERIC=y
-
-# USB PHY
-CONFIG_PHY_QCOM_QMP=y
-CONFIG_PHY_QCOM_QUSB2=y
-CONFIG_PHY_QCOM_QMP_USB=y
-
-# Storage (UFS)
-CONFIG_SCSI=y
-CONFIG_SCSI_UFSHCD=y
-CONFIG_SCSI_UFSHCD_PLATFORM=y
-CONFIG_SCSI_UFS_QCOM=y
-CONFIG_PHY_QCOM_UFS=y
-
-# Qualcomm platform support
-CONFIG_QCOM_RPMH=y
-CONFIG_QCOM_RPMHPD=y
-CONFIG_QCOM_SCM=y
-CONFIG_QCOM_SMEM=y
-CONFIG_QCOM_SOCINFO=y
-CONFIG_QCOM_PDC=y
-CONFIG_QCOM_LLCC=y
-CONFIG_QCOM_SDM845_LLCC=y
-CONFIG_PINCTRL_SDM845=y
-CONFIG_REGULATOR_QCOM_RPMH=y
-CONFIG_INTERCONNECT_QCOM=y
-CONFIG_INTERCONNECT_QCOM_SDM845=y
-
-# I2C/SPI (QUP)
-CONFIG_I2C=y
-CONFIG_I2C_QCOM_GENI=y
-CONFIG_SPI=y
-CONFIG_SPI_QCOM_GENI=y
-
-# Serial console (debug UART)
-CONFIG_SERIAL_MSM=y
-CONFIG_SERIAL_MSM_CONSOLE=y
-
-# Power management
-CONFIG_REGULATOR=y
-CONFIG_REGULATOR_QCOM_SPMI=y
-
-# Filesystem (for rootfs)
-CONFIG_EXT4_FS=y
-CONFIG_EXT4_FS_POSIX_ACL=y
-CONFIG_TMPFS=y
-CONFIG_TMPFS_POSIX_ACL=y
-CONFIG_DEVTMPFS=y
-CONFIG_DEVTMPFS_MOUNT=y
-
-# Basic networking (for WiFi/SSH)
-CONFIG_NET=y
-CONFIG_INET=y
-CONFIG_WIRELESS=y
-CONFIG_RFKILL=y
-
-# Kernel modules
-CONFIG_MODULES=y
-CONFIG_MODULE_UNLOAD=y
-
-# Essential system
-CONFIG_PRINTK=y
-CONFIG_BLK_DEV_INITRD=y
-CONFIG_RD_GZIP=y
-CONFIG_PROC_FS=y
-CONFIG_SYSFS=y
-CONFIG_CGROUPS=y
-CONFIG_INOTIFY_USER=y
-CONFIG_SIGNALFD=y
-CONFIG_TIMERFD=y
-CONFIG_EPOLL=y
-
-# Ramoops for crash debugging
-CONFIG_PSTORE=y
-CONFIG_PSTORE_CONSOLE=y
-CONFIG_PSTORE_RAM=y
-
-# Simple framebuffer (early boot display)
-CONFIG_DRM_SIMPLEDRM=y
-CONFIG_SYSFB_SIMPLEFB=y
-CONFIG_OF_EARLY_FLATTREE=y
-CONFIG_FRAMEBUFFER_CONSOLE=y
-CONFIG_FB=y
-
-# Remoteproc (for modem, wifi, adsp, etc.)
-CONFIG_REMOTEPROC=y
-CONFIG_QCOM_Q6V5_MSS=y
-CONFIG_QCOM_Q6V5_ADSP=y
-CONFIG_QCOM_Q6V5_WCSS=y
-CONFIG_QCOM_Q6V5_PAS=y
-CONFIG_QCOM_SYSMON=y
-CONFIG_QCOM_AOSS_QMP=y
-CONFIG_RPMSG=y
-CONFIG_RPMSG_QCOM_SMD=y
-CONFIG_RPMSG_QCOM_GLINK=y
-CONFIG_RPMSG_QCOM_GLINK_SMEM=y
-CONFIG_QRTR=y
-CONFIG_MHI_BUS=y
-CONFIG_QCOM_PIL_INFO=y
-CONFIG_QCOM_WCNSS_PIL=y
-
-# IPA (modem data)
-CONFIG_QCOM_IPA=y
-
-# Audio (optional, for completeness)
-CONFIG_SOUND=y
-CONFIG_SND=y
-CONFIG_SND_SOC=y
-CONFIG_SND_SOC_QCOM=y
-CONFIG_SND_SOC_SDM845=y
-
-# PMIC
-CONFIG_MFD_QCOM_RPM=y
-CONFIG_SPMI=y
-CONFIG_PINCTRL_QCOM_SPMI_PMIC=y
-
-# Charger (PMI8998)
-CONFIG_CHARGER_QCOM_SMBB=y
-
-# LED (PMI8998 flash)
-CONFIG_LEDS_CLASS=y
-CONFIG_LEDS_CLASS_FLASH=y
-CONFIG_LEDS_QCOM_FLASH=y
-CONFIG_LEDS_QCOM_LPG=y
-CONFIG_LEDS_PWM=y
-CONFIG_BACKLIGHT_PWM=y
-CONFIG_PWM=y
-CONFIG_PWM_QCOM_LPG=y
-CONFIG_DRM_PANEL_BACKLIGHT_QUIRKS=y
-CONFIG_OF_EARLY_FLATTREE=y
-CONFIG_EOF
-
-# Merge the fragment into the current config
-./scripts/kconfig/merge_config.sh .config /tmp/razer_aura_fragment.config
-
-# Keep the Qualcomm Wi-Fi bring-up chain consistently modular so userspace can
-# load it after rootfs is available and we can validate the .ko artifacts.
+# Keep the Qualcomm Wi-Fi bring-up chain aligned with the postmarketOS SDM845
+# reference config. The remoteprocs are modules so userspace can start the
+# MSS/RFS path after rootfs services are available, while GLINK/SMD core
+# transports stay built in like the working pmOS SDM845 kernels.
 ./scripts/config --module CFG80211
 ./scripts/config --module MAC80211
 ./scripts/config --module ATH10K
 ./scripts/config --module ATH10K_SNOC
-./scripts/config --module QCOM_Q6V5_WCSS
+./scripts/config --module QCOM_Q6V5_COMMON
+./scripts/config --module QCOM_Q6V5_MSS
+./scripts/config --module QCOM_Q6V5_ADSP
+./scripts/config --module QCOM_Q6V5_PAS
+./scripts/config --disable QCOM_Q6V5_WCSS
 ./scripts/config --module QCOM_WCNSS_PIL
 ./scripts/config --module QCOM_RPROC_COMMON
-./scripts/config --module RPMSG_QCOM_SMD
-./scripts/config --module RPMSG_QCOM_GLINK
-./scripts/config --module RPMSG_QCOM_GLINK_SMEM
 ./scripts/config --module QCOM_SYSMON
+./scripts/config --enable QCOM_PD_MAPPER
+./scripts/config --module QCOM_PD_MAPPER
+./scripts/config --module QCOM_PDR_HELPERS
+./scripts/config --module QCOM_PDR_MSG
+./scripts/config --enable QCOM_RMTFS_MEM
+./scripts/config --module QCOM_MDT_LOADER
+./scripts/config --module QCOM_QMI_HELPERS
 ./scripts/config --enable QCOM_AOSS_QMP
+./scripts/config --enable RESET_QCOM_AOSS
+./scripts/config --module RESET_QCOM_PDC
+./scripts/config --enable RPMSG_QCOM_SMD
+./scripts/config --enable RPMSG_QCOM_GLINK
+./scripts/config --enable RPMSG_QCOM_GLINK_RPM
+./scripts/config --module RPMSG_QCOM_GLINK_SMEM
 ./scripts/config --module QRTR
+./scripts/config --module QRTR_SMD
+./scripts/config --module QRTR_TUN
+./scripts/config --module QRTR_MHI
 ./scripts/config --module MHI_BUS
+./scripts/config --module QCOM_PIL_INFO
+./scripts/config --module QCOM_IPA
 
 # Optional: open menuconfig for manual adjustments
 if [ "${1:-}" = "menuconfig" ]; then
@@ -362,13 +239,18 @@ rm -rf "$OUTPUT_DIR/modules_install"
 make INSTALL_MOD_PATH="$OUTPUT_DIR/modules_install" modules_install
 
 KERNEL_RELEASE=$(make -s kernelrelease)
+echo "$KERNEL_RELEASE" > "$OUTPUT_DIR/kernel.release"
 for module_path in \
     "kernel/drivers/net/wireless/ath/ath10k/ath10k_core.ko" \
     "kernel/drivers/net/wireless/ath/ath10k/ath10k_snoc.ko" \
-    "kernel/drivers/remoteproc/qcom_q6v5_wcss.ko" \
-    "kernel/drivers/remoteproc/qcom_wcnss_pil.ko"; do
+    "kernel/drivers/remoteproc/qcom_q6v5.ko" \
+    "kernel/drivers/remoteproc/qcom_q6v5_mss.ko" \
+    "kernel/drivers/remoteproc/qcom_q6v5_pas.ko" \
+    "kernel/drivers/remoteproc/qcom_wcnss_pil.ko" \
+    "kernel/drivers/soc/qcom/qcom_pd_mapper.ko" \
+    "kernel/drivers/net/ipa/ipa.ko"; do
     if [ ! -f "$OUTPUT_DIR/modules_install/lib/modules/$KERNEL_RELEASE/$module_path" ]; then
-        echo "ERROR: expected Wi-Fi module missing after modules_install: $module_path"
+        echo "ERROR: expected SDM845 Wi-Fi/MSS module missing after modules_install: $module_path"
         exit 1
     fi
 done
@@ -384,6 +266,22 @@ cat arch/arm64/boot/Image.gz \
     arch/arm64/boot/dts/qcom/sdm845-razer-aura.dtb \
     > "$OUTPUT_DIR/Image.gz-dtb"
 
+mkdir -p "$WIN_OUTPUT_DIR"
+copy_aux_output() {
+    local src="$1"
+    local dst="$2"
+
+    if ! cp -f "$src" "$dst"; then
+        echo "  WARNING: failed to copy $(basename "$src") to Windows output."
+        echo "           WSL output remains authoritative for boot packaging: $src"
+    fi
+}
+
+copy_aux_output "$OUTPUT_DIR/Image.gz" "$WIN_OUTPUT_DIR/Image.gz"
+copy_aux_output "$OUTPUT_DIR/sdm845-razer-aura.dtb" "$WIN_OUTPUT_DIR/sdm845-razer-aura.dtb"
+copy_aux_output "$OUTPUT_DIR/Image.gz-dtb" "$WIN_OUTPUT_DIR/Image.gz-dtb"
+copy_aux_output "$OUTPUT_DIR/kernel.release" "$WIN_OUTPUT_DIR/kernel.release"
+
 echo ""
 echo "========================================"
 echo " Kernel build complete!"
@@ -394,6 +292,7 @@ echo "  Image.gz            - Compressed kernel image"
 echo "  sdm845-razer-aura.dtb - Device tree blob"
 echo "  Image.gz-dtb        - Combined kernel + DTB"
 echo "  modules_install/    - Kernel modules"
+echo "  kernel.release      - Kernel release string for rootfs/boot checks"
 echo "  build.log           - Build log"
 echo ""
 echo "Next: Run bash 03-build-rootfs.sh"
