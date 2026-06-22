@@ -1,5 +1,26 @@
-aura-p-release-3201-user-full.zip
-*.log
+# Build products and local caches
+output/
 .tmp/
-output/*.img
+*.log
 *.img
+__pycache__/
+*.pyc
+
+# Factory/reference images are redistributed separately, not through Git.
+aura-p-release-3201-user-full.zip
+aura-p-release-3201-user-full/
+11.1.2.2-OP6-FASTBOOT.zip
+payload-dumper-go_*.tar.gz
+
+# Proprietary Razer/Qualcomm firmware. Keep only extraction instructions.
+firmware/**
+!firmware/README.md
+
+# Per-device values such as the factory WLAN MAC.
+config/device.env
+
+# Local agent/editor notes and one-off captures.
+CLAUDE.md
+codex-skills/
+razer_qmi_dump.xml
+output_direct.txt

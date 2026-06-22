@@ -16,11 +16,23 @@ set -euo pipefail
 WORKDIR="${RAZER_WORKDIR:-$HOME/razorphone2linux}"
 KERNEL_DIR="$WORKDIR/kernel/linux"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-OUTPUT_DIR="$WORKDIR/output"
-WIN_OUTPUT_DIR="/mnt/c/repo/razorphone2linux/output"
+source "$PROJECT_DIR/config/kernel-source.env"
+source "$PROJECT_DIR/config/build.env"
+IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-printer}"
+case "$IMAGE_PROFILE" in
+    base|printer) ;;
+    *) echo "ERROR: RAZER_IMAGE_PROFILE must be base or printer."; exit 2 ;;
+esac
+OUTPUT_DIR="$WORKDIR/output/$IMAGE_PROFILE"
+WIN_OUTPUT_DIR="$PROJECT_DIR/output/$IMAGE_PROFILE"
+
+mkdir -p "$OUTPUT_DIR" "$WIN_OUTPUT_DIR"
 
 export ARCH=arm64
 export CROSS_COMPILE=aarch64-linux-gnu-
+# Suppress the kernel build system's automatic "+" suffix for an integration
+# commit that is intentionally not an upstream annotated release tag.
+export LOCALVERSION=""
 
 MAX_JOBS=4
 NPROC=$(nproc)
@@ -34,8 +46,37 @@ echo "========================================"
 echo " Razer Phone 2 - Kernel Build"
 echo "========================================"
 echo "Kernel dir: $KERNEL_DIR"
+echo "Image profile: $IMAGE_PROFILE"
 echo "Parallel jobs: $BUILD_JOBS"
 echo ""
+
+if [ ! -d "$KERNEL_DIR/.git" ]; then
+    echo "ERROR: missing kernel checkout. Run scripts/01-setup-environment.sh first."
+    exit 1
+fi
+
+if ! git -C "$KERNEL_DIR" merge-base --is-ancestor "$KERNEL_COMMIT" HEAD; then
+    echo "ERROR: pinned kernel commit is not an ancestor of the checkout."
+    echo "Expected base commit: $KERNEL_COMMIT"
+    exit 1
+fi
+
+if [ -n "$(git -C "$KERNEL_DIR" status --porcelain)" ]; then
+    echo "ERROR: kernel checkout contains uncommitted files before integration."
+    echo "Use a clean checkout or move it aside and rerun 01-setup-environment.sh."
+    git -C "$KERNEL_DIR" status --short
+    exit 1
+fi
+
+if grep -Rqs -E 'QRTR diag|GLINK diag|q6v5_diag_dump_crash_smem|IPA QMI diag' \
+        "$KERNEL_DIR/net/qrtr/af_qrtr.c" \
+        "$KERNEL_DIR/drivers/rpmsg/qcom_glink_native.c" \
+        "$KERNEL_DIR/drivers/remoteproc/qcom_q6v5.c" \
+        "$KERNEL_DIR/drivers/net/ipa/ipa_qmi.c"; then
+    echo "ERROR: stale diagnostic instrumentation exists in the kernel checkout."
+    echo "Move ~/razorphone2linux/kernel/linux aside and rerun 01-setup-environment.sh."
+    exit 1
+fi
 
 # -------------------------------------------------------
 # Step 1: Install device tree and panel driver into kernel tree
@@ -123,13 +164,6 @@ if [ -d "$PATCH_DIR" ]; then
         patch_name="$(basename "$patch_file")"
         if git -C "$KERNEL_DIR" apply --recount --reverse --check "$patch_file" >/dev/null 2>&1; then
             echo "  $patch_name already applied."
-        elif [ "$patch_name" = "0001-razor-aura-mss-pdr-diagnostics.patch" ] &&
-             grep -q "sdm845 mss diag reset" "$KERNEL_DIR/drivers/remoteproc/qcom_q6v5_mss.c" &&
-             grep -q "PDM diag:" "$KERNEL_DIR/drivers/soc/qcom/qcom_pd_mapper.c"; then
-            echo "  $patch_name already applied (marker check)."
-        elif [ "$patch_name" = "0002-razor-aura-mss-crash-reason-deep-diagnostics.patch" ] &&
-             grep -q "q6v5_diag_dump_crash_smem" "$KERNEL_DIR/drivers/remoteproc/qcom_q6v5.c"; then
-            echo "  $patch_name already applied (marker check)."
         else
             git -C "$KERNEL_DIR" apply --recount --check "$patch_file"
             git -C "$KERNEL_DIR" apply --recount "$patch_file"
@@ -138,6 +172,27 @@ if [ -d "$PATCH_DIR" ]; then
     done < <(find "$PATCH_DIR" -maxdepth 1 -type f -name '*.patch' | sort)
 else
     echo "  No kernel-patches directory."
+fi
+
+# Keep the generated external kernel checkout clean. The authoritative source
+# remains this project (DTS, panel source, config, and top-level patches), while
+# the local integration commit prevents git's "-dirty" marker and makes it
+# obvious exactly what was built.
+if [ -n "$(git -C "$KERNEL_DIR" status --porcelain)" ]; then
+    if [ -z "$(git -C "$KERNEL_DIR" branch --show-current)" ]; then
+        git -C "$KERNEL_DIR" switch -c razerphone2linux/integration
+    fi
+    git -C "$KERNEL_DIR" add -A
+    git -C "$KERNEL_DIR" \
+        -c user.name="RazerPhone2Linux Build" \
+        -c user.email="razerphone2linux@example.invalid" \
+        commit -m "arm64: qcom: integrate Razer Phone 2 project sources"
+fi
+
+if [ -n "$(git -C "$KERNEL_DIR" status --porcelain)" ]; then
+    echo "ERROR: kernel integration commit did not leave a clean source tree."
+    git -C "$KERNEL_DIR" status --short
+    exit 1
 fi
 
 # -------------------------------------------------------
@@ -167,6 +222,13 @@ echo "Applying Razer Phone 2 config fragment: $CONFIG_FRAGMENT"
 sed 's/\r$//' "$CONFIG_FRAGMENT" > /tmp/razer_aura_fragment.config
 ./scripts/kconfig/merge_config.sh -m .config /tmp/razer_aura_fragment.config
 
+if [ "$IMAGE_PROFILE" = "printer" ]; then
+    PRINTER_CONFIG_FRAGMENT="$PROJECT_DIR/config/razer-aura-printer.config"
+    echo "Applying printer-host config fragment: $PRINTER_CONFIG_FRAGMENT"
+    sed 's/\r$//' "$PRINTER_CONFIG_FRAGMENT" > /tmp/razer_aura_printer_fragment.config
+    ./scripts/kconfig/merge_config.sh -m .config /tmp/razer_aura_printer_fragment.config
+fi
+
 # Keep the Qualcomm Wi-Fi bring-up chain aligned with the postmarketOS SDM845
 # reference config. The remoteprocs are modules so userspace can start the
 # MSS/RFS path after rootfs services are available, while GLINK/SMD core
@@ -183,8 +245,7 @@ sed 's/\r$//' "$CONFIG_FRAGMENT" > /tmp/razer_aura_fragment.config
 ./scripts/config --module QCOM_WCNSS_PIL
 ./scripts/config --module QCOM_RPROC_COMMON
 ./scripts/config --module QCOM_SYSMON
-./scripts/config --enable QCOM_PD_MAPPER
-./scripts/config --module QCOM_PD_MAPPER
+./scripts/config --disable QCOM_PD_MAPPER
 ./scripts/config --module QCOM_PDR_HELPERS
 ./scripts/config --module QCOM_PDR_MSG
 ./scripts/config --enable QCOM_RMTFS_MEM
@@ -192,7 +253,7 @@ sed 's/\r$//' "$CONFIG_FRAGMENT" > /tmp/razer_aura_fragment.config
 ./scripts/config --module QCOM_QMI_HELPERS
 ./scripts/config --enable QCOM_AOSS_QMP
 ./scripts/config --enable RESET_QCOM_AOSS
-./scripts/config --module RESET_QCOM_PDC
+./scripts/config --enable RESET_QCOM_PDC
 ./scripts/config --enable RPMSG_QCOM_SMD
 ./scripts/config --enable RPMSG_QCOM_GLINK
 ./scripts/config --enable RPMSG_QCOM_GLINK_RPM
@@ -204,6 +265,7 @@ sed 's/\r$//' "$CONFIG_FRAGMENT" > /tmp/razer_aura_fragment.config
 ./scripts/config --module MHI_BUS
 ./scripts/config --module QCOM_PIL_INFO
 ./scripts/config --module QCOM_IPA
+./scripts/config --disable LOCALVERSION_AUTO
 
 # Optional: open menuconfig for manual adjustments
 if [ "${1:-}" = "menuconfig" ]; then
@@ -247,7 +309,6 @@ for module_path in \
     "kernel/drivers/remoteproc/qcom_q6v5_mss.ko" \
     "kernel/drivers/remoteproc/qcom_q6v5_pas.ko" \
     "kernel/drivers/remoteproc/qcom_wcnss_pil.ko" \
-    "kernel/drivers/soc/qcom/qcom_pd_mapper.ko" \
     "kernel/drivers/net/ipa/ipa.ko"; do
     if [ ! -f "$OUTPUT_DIR/modules_install/lib/modules/$KERNEL_RELEASE/$module_path" ]; then
         echo "ERROR: expected SDM845 Wi-Fi/MSS module missing after modules_install: $module_path"
@@ -281,6 +342,8 @@ copy_aux_output "$OUTPUT_DIR/Image.gz" "$WIN_OUTPUT_DIR/Image.gz"
 copy_aux_output "$OUTPUT_DIR/sdm845-razer-aura.dtb" "$WIN_OUTPUT_DIR/sdm845-razer-aura.dtb"
 copy_aux_output "$OUTPUT_DIR/Image.gz-dtb" "$WIN_OUTPUT_DIR/Image.gz-dtb"
 copy_aux_output "$OUTPUT_DIR/kernel.release" "$WIN_OUTPUT_DIR/kernel.release"
+echo "mainline" > "$OUTPUT_DIR/kernel.flavor"
+copy_aux_output "$OUTPUT_DIR/kernel.flavor" "$WIN_OUTPUT_DIR/kernel.flavor"
 
 echo ""
 echo "========================================"

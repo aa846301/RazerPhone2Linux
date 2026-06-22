@@ -1,0 +1,25 @@
+#!/bin/bash
+# Register aarch64 binfmt_misc for qemu in WSL.
+
+set -euo pipefail
+
+if [ "$EUID" -ne 0 ]; then
+    echo "ERROR: register-binfmt.sh must run as root"
+    exit 1
+fi
+
+if [ ! -x /usr/bin/qemu-aarch64-static ]; then
+    echo "ERROR: /usr/bin/qemu-aarch64-static not found"
+    echo "Install qemu-user-static first."
+    exit 1
+fi
+
+mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
+
+if [ ! -f /proc/sys/fs/binfmt_misc/qemu-aarch64 ]; then
+    printf '%s' ':qemu-aarch64:M:0:\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\xb7\x00:\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/qemu-aarch64-static:CF' \
+        > /proc/sys/fs/binfmt_misc/register
+fi
+
+cat /proc/sys/fs/binfmt_misc/qemu-aarch64
+echo "BINFMT_OK"

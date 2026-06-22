@@ -43,7 +43,12 @@
 	compatible = "razer,aura", "qcom,sdm845";
 	chassis-type = "handset";
 
-	qcom,msm-id = <QCOM_ID_SDM845 0x20001>;
+	/*
+	 * Match the factory Android boot DTB. Keep this revision aligned while
+	 * validating TZ-authenticated MSS firmware loading.
+	 */
+	qcom,msm-id = <QCOM_ID_SDM845 0x20000>;
+	qcom,board-id = <0 0>;
 
 	aliases {
 		serial0 = &uart9;
@@ -118,17 +123,30 @@
 
 	reserved-memory {
 		/*
-		 * The rmtfs memory region is used by the modem firmware.
-		 * Address is hardcoded in modem firmware - do not change.
+		 * Razer and OnePlus Android downstream DTBs describe rmtfs as a
+		 * dynamically allocated 2 MiB sharedmem-uio region with guard memory.
+		 * Follow the proven OnePlus mainline pattern for this contrast test:
+		 * keep the old SDM845 rmtfs/modem window reserved below, and expose
+		 * the active rmtfs region at the high address used by OnePlus.
 		 */
-		rmtfs_mem: rmtfs-region@f5b00000 {
+		rmtfs_mem: rmtfs-mem@f5b00000 {
 			compatible = "qcom,rmtfs-mem";
 			reg = <0 0xf5b00000 0 0x202000>;
-			qcom,use-guard-pages;
 			no-map;
 
 			qcom,client-id = <1>;
 			qcom,vmid = <QCOM_SCM_VMID_MSS_MSA>;
+			qcom,use-guard-pages;
+		};
+
+		/*
+		 * Match the OnePlus/Samsung SDM845 mainline safety reserve for the old
+		 * downstream modem/rmtfs window. This keeps Linux from allocating the
+		 * area while rmtfs itself is served from the high active region above.
+		 */
+		removed_region: removed-region@88f00000 {
+			no-map;
+			reg = <0 0x88f00000 0 0x1c00000>;
 		};
 
 		/*
@@ -143,6 +161,29 @@
 			ftrace-size = <0x40000>;
 			pmsg-size = <0x200000>;
 			ecc-size = <16>;
+		};
+
+		/*
+		 * FIH/Razer downstream reserves these OEM regions. They are not
+		 * directly consumed by mainline drivers yet, but they should not
+		 * be handed to Linux while validating modem firmware stability.
+		 */
+		fih_nv_mem: fih-nv@af000000 {
+			compatible = "removed-dma-pool";
+			no-map;
+			reg = <0 0xaf000000 0 0x800000>;
+		};
+
+		fih_pstore_mem: fih-pstore@af800000 {
+			compatible = "removed-dma-pool";
+			no-map;
+			reg = <0 0xaf800000 0 0x200000>;
+		};
+
+		fih_mem: fih@afa00000 {
+			compatible = "removed-dma-pool";
+			no-map;
+			reg = <0 0xafa00000 0 0x600000>;
 		};
 	};
 
@@ -205,6 +246,7 @@
 		pinctrl-0 = <&panel_vci_default>;
 		pinctrl-names = "default";
 		regulator-boot-on;
+		regulator-always-on;
 	};
 
 	/*
@@ -223,6 +265,7 @@
 		pinctrl-0 = <&panel_poc_default>;
 		pinctrl-names = "default";
 		regulator-boot-on;
+		regulator-always-on;
 	};
 };
 
@@ -236,6 +279,11 @@
 
 &adsp_pas {
 	firmware-name = "qcom/sdm845/Razer/aura/adsp.mbn";
+	/*
+	 * WiFi/MSS controlled test: factory Android keeps ADSP/SLPI/CDSP
+	 * available. Keep audio/SLIM users disabled, but allow the remoteproc
+	 * domain to boot so modem root_pd can resolve early dependencies.
+	 */
 	status = "okay";
 };
 
@@ -353,6 +401,7 @@
 			regulator-max-microvolt = <1800000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 			regulator-boot-on;
+			regulator-always-on;
 		};
 
 		/* LDO17: WiFi/BT RFA, 1.3V */
@@ -454,16 +503,20 @@
 
 /*
  * ==========================================================================
- * GPU (Adreno 630)
+ * Display/GPU clocks
  * ==========================================================================
+ *
+ * Practical bring-up uses the bootloader framebuffer through simpledrm. Keep
+ * display/GPU clock domains disabled here: on SDM845, initializing these clocks
+ * can reset the bootloader-programmed scanout state and make simplefb go black
+ * a few seconds after boot.
  */
-&gpu {
-	status = "okay";
+&dispcc {
+	status = "disabled";
+};
 
-	zap-shader {
-		memory-region = <&gpu_mem>;
-		firmware-name = "qcom/sdm845/Razer/aura/a630_zap.mbn";
-	};
+&gpu {
+	status = "disabled";
 };
 
 /*
@@ -542,15 +595,15 @@
  * simpledrm owns 0x9d400000 exclusively in this phase.
  */
 &mdss {
-        status = "disabled";
+	status = "disabled";
 };
 
 &mdss_mdp {
-        status = "disabled";
+	status = "disabled";
 };
 
 &mdss_dsi0 {
-        status = "disabled";
+	status = "disabled";
 
 	qcom,dual-dsi-mode;
 	qcom,master-dsi;
@@ -625,7 +678,7 @@
 };
 
 &mdss_dsi0_phy {
-        status = "disabled";
+	status = "disabled";
 };
 
 /*
@@ -634,15 +687,15 @@
  * DSI1 is linked via port@1 on the panel node.
  */
 &mdss_dsi1 {
-	status = "okay";
+	status = "disabled";
 	vdda-supply = <&vdda_mipi_dsi0_1p2>;
 
 	qcom,dual-dsi-mode;
 	qcom,mdss-mdp-transfer-time-us = <12500>;
 
 	/* DSI1 is slave, so use DSI0 clocks */
-	assigned-clock-parents = <&mdss_dsi0_phy DSI_BYTE_PLL_CLK>,
-				 <&mdss_dsi0_phy DSI_PIXEL_PLL_CLK>;
+	assigned-clock-parents = <&mdss_dsi0_phy 0>,
+				 <&mdss_dsi0_phy 1>;
 };
 
 &mdss_dsi1_out {
@@ -651,7 +704,7 @@
 };
 
 &mdss_dsi1_phy {
-        status = "disabled";
+	status = "disabled";
 };
 
 /*
@@ -663,6 +716,12 @@
 	qcom,gsi-loader = "self";
 	memory-region = <&ipa_fw_mem>;
 	firmware-name = "qcom/sdm845/Razer/aura/ipa_fws.mbn";
+	/*
+	 * WiFi/MSS controlled test: IPA disabled did not prevent the MSS fatal,
+	 * and ADSP/SLPI/CDSP alone did not create WLFW. Restore IPA with the
+	 * factory remoteproc set to test whether modem root_pd expects the full
+	 * modem data path present, rather than treating IPA as the trigger.
+	 */
 	status = "okay";
 };
 
@@ -672,9 +731,10 @@
  * ==========================================================================
  */
 &mss_pil {
+	status = "okay";
 	firmware-name = "qcom/sdm845/Razer/aura/mba.mbn",
 			"qcom/sdm845/Razer/aura/modem.mbn";
-	status = "okay";
+	qcom,fih-nv-memory-region = <&fih_nv_mem>;
 };
 
 /*
@@ -723,8 +783,12 @@
  * ==========================================================================
  */
 &pmi8998_wled {
-	status = "okay";
-	qcom,enabled-strings = <0 1 2 3>;
+	/*
+	 * Keep WLED disabled during framebuffer handoff bring-up. Enabling the
+	 * PMI8998 backlight without Razer-specific current/string limits can leave
+	 * the panel at unsafe brightness across warm reboots.
+	 */
+	status = "disabled";
 };
 
 /*
@@ -815,7 +879,25 @@
  */
 &slpi_pas {
 	firmware-name = "qcom/sdm845/Razer/aura/slpi.mbn";
+	/*
+	 * WiFi/MSS controlled test: Razer's Android DT keeps SLPI enabled and
+	 * factory firmware contains slpi root/sensor service-registry entries.
+	 */
 	status = "okay";
+};
+
+/*
+ * ==========================================================================
+ * SLIMbus Audio Transport
+ * ==========================================================================
+ */
+&slim {
+	/*
+	 * Keep SLIM disabled while validating MSS/WCN3990 WiFi bring-up. A
+	 * full-factory-peripheral contrast with SLIM/audio/BT enabled did not move
+	 * the MSS fatal boundary or create WLFW.
+	 */
+	status = "disabled";
 };
 
 /*
@@ -828,7 +910,12 @@
 	model = "Razer Phone 2";
 	pinctrl-0 = <&quat_mi2s_active &quat_mi2s_sd0_active &quat_mi2s_sd1_active>;
 	pinctrl-names = "default";
-	status = "okay";
+	/*
+	 * Keep audio disabled while validating MSS/WCN3990 WiFi bring-up. The
+	 * full-factory-peripheral contrast did not help and adds unrelated codec
+	 * and routing noise.
+	 */
+	status = "disabled";
 
 	audio-routing = "RX_BIAS", "MCLK",
 			"AMIC1", "MIC BIAS3",
@@ -914,6 +1001,11 @@
  * Uses UART6 with 4-pin flow control for HCI transport.
  */
 &uart6 {
+	/*
+	 * Enable WCN3990 Bluetooth for the BT-firmware contrast build. This keeps
+	 * the test narrower than the earlier full-peripheral build: only the BT
+	 * HCI transport and QCA firmware path are added while SLIM/audio stay off.
+	 */
 	status = "okay";
 
 	pinctrl-0 = <&qup_uart6_4pin>;
@@ -928,6 +1020,16 @@
 		vddrf-supply = <&vreg_l17a_1p3>;
 		vddch0-supply = <&vreg_l25a_3p3>;
 		max-speed = <3200000>;
+
+		/*
+		 * Razer factory BT MAC 44:5E:CD:B1:1B:60 (read on Android from
+		 * /sys/module/fih_mfd/parameters/bt_mac). Mainline has no fih_mfd
+		 * provider, so without this the controller registers as
+		 * HCI_UNCONFIGURED (no valid BD_ADDR) and HCIDEVUP returns
+		 * -EOPNOTSUPP (errno 95). Property bytes are little-endian, i.e.
+		 * the MAC reversed: 44:5E:CD:B1:1B:60 -> [60 1B B1 CD 5E 44].
+		 */
+		local-bd-address = [60 1B B1 CD 5E 44];
 	};
 };
 
@@ -1093,7 +1195,7 @@
  */
 &venus {
 	firmware-name = "qcom/sdm845/Razer/aura/venus.mbn";
-	status = "okay";
+	status = "disabled";
 };
 
 /*
@@ -1102,6 +1204,8 @@
  * ==========================================================================
  */
 &wcd9340 {
+	status = "disabled";
+
 	pinctrl-0 = <&wcd_intr_default>;
 	pinctrl-names = "default";
 	reset-gpios = <&tlmm 64 GPIO_ACTIVE_HIGH>;
@@ -1138,5 +1242,11 @@
 	vdd-3.3-ch1-supply = <&vreg_l23a_3p3>;
 
 	qcom,calibration-variant = "razer_aura";
-	qcom,snoc-host-cap-8bit-quirk;
+	/*
+	 * Razer's WLAN.HL.2.0.c10-00085 firmware exposes WLFW successfully,
+	 * but rejects MSA_INFO with QMI_ERR_INCOMPATIBLE_STATE when mainline
+	 * ath10k sends HOST_CAP first. Skipping HOST_CAP lets MSA setup,
+	 * firmware boot, phy0, wlan0, and scanning complete.
+	 */
+	qcom,snoc-host-cap-skip-quirk;
 };

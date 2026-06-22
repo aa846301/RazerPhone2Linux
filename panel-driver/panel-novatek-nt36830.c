@@ -50,8 +50,7 @@
 		}                                                              \
 	} while (0)
 
-struct nt36830_panel
-{
+struct nt36830_panel {
 	struct drm_panel panel;
 	struct mipi_dsi_device *dsi0;
 	struct mipi_dsi_device *dsi1;
@@ -487,7 +486,7 @@ static const struct drm_display_mode nt36830_mode = {
 };
 
 static int nt36830_get_modes(struct drm_panel *panel,
-							 struct drm_connector *connector)
+			     struct drm_connector *connector)
 {
 	return drm_connector_helper_get_modes_fixed(connector, &nt36830_mode);
 }
@@ -531,7 +530,7 @@ static struct backlight_device *nt36830_create_backlight(struct mipi_dsi_device 
 	};
 
 	return devm_backlight_device_register(dev, dev_name(dev), dev, dsi,
-										  &nt36830_bl_ops, &props);
+					      &nt36830_bl_ops, &props);
 }
 
 /*
@@ -609,18 +608,19 @@ static int nt36830_probe(struct mipi_dsi_device *dsi)
 	if (dsi1_node) {
 		struct mipi_dsi_host *host =
 			of_find_mipi_dsi_host_by_node(dsi1_node);
+		const struct mipi_dsi_device_info info = {
+			.type = "nt36830-sec",
+			.channel = 0,
+			.node = NULL,
+		};
+
 		of_node_put(dsi1_node);
 
 		if (!host)
 			return dev_err_probe(dev, -EPROBE_DEFER,
 					     "Cannot find secondary DSI host\n");
 
-		dsi1 = mipi_dsi_device_register_full(host,
-			&(struct mipi_dsi_device_info){
-				.type = "nt36830-sec",
-				.channel = 0,
-				.node = NULL,
-			});
+		dsi1 = mipi_dsi_device_register_full(host, &info);
 		if (IS_ERR(dsi1))
 			return dev_err_probe(dev, PTR_ERR(dsi1),
 					     "Cannot register secondary DSI device\n");
@@ -695,7 +695,7 @@ static int nt36830_probe(struct mipi_dsi_device *dsi)
 	}
 
 	dev_info(dev, "NT36830 panel probed (dual-DSI=%s, DSC 10bpc/8bpp)\n",
-			 ctx->dsi1 ? "yes" : "no");
+		 ctx->dsi1 ? "yes" : "no");
 
 	return 0;
 }

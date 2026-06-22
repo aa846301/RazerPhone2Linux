@@ -101,6 +101,15 @@ populate_partlabels() {
     fi
 }
 
+partition_count() {
+    local count=0
+    for blk in /sys/class/block/*; do
+        [ -f "$blk/partition" ] || continue
+        count=$((count + 1))
+    done
+    echo "$count"
+}
+
 probe_root_candidate() {
     local candidate="$1" probe_dir=/run/root-probe
     [ -b "$candidate" ] || return 1
@@ -131,28 +140,28 @@ find_root() {
             local partuuid="${root_arg#PARTUUID=}"
             dev=$(blkid -t "PARTUUID=$partuuid" -o device 2>/dev/null | head -1)
             if [ -n "$dev" ]; then
-                echo "[boot] PARTUUID $partuuid -> $dev"
+                echo "[boot] PARTUUID $partuuid -> $dev" >&2
                 probe_root_candidate "$dev" && return 0
             fi
             ;;
         /dev/disk/by-partlabel/*)
             local label="${root_arg#/dev/disk/by-partlabel/}"
-            echo "[boot] cmdline wants partlabel: $label"
+            echo "[boot] cmdline wants partlabel: $label" >&2
             # Try via by-partlabel symlink (populated by populate_partlabels above)
             if [ -e "/dev/disk/by-partlabel/$label" ]; then
                 dev=$(readlink -f "/dev/disk/by-partlabel/$label" 2>/dev/null || echo "/dev/disk/by-partlabel/$label")
-                echo "[boot] $label -> $dev"
+                echo "[boot] $label -> $dev" >&2
                 probe_root_candidate "$dev" && return 0
             fi
             # Try blkid search
             dev=$(blkid -t "PARTLABEL=$label" -o device 2>/dev/null | head -1)
             if [ -n "$dev" ]; then
-                echo "[boot] blkid PARTLABEL=$label -> $dev"
+                echo "[boot] blkid PARTLABEL=$label -> $dev" >&2
                 probe_root_candidate "$dev" && return 0
             fi
             ;;
         /dev/*)
-            echo "[boot] cmdline root: $root_arg"
+            echo "[boot] cmdline root: $root_arg" >&2
             probe_root_candidate "$root_arg" && return 0
             ;;
     esac
@@ -220,6 +229,18 @@ done
 echo "[boot] Populating /dev/disk/by-partlabel..."
 populate_partlabels
 
+echo "[boot] Waiting for partitions/rootfs..."
+waited=0
+while [ "$waited" -lt 20 ]; do
+    mdev -s 2>/dev/null || true
+    populate_partlabels
+    parts=$(partition_count)
+    [ -e /dev/disk/by-partlabel/userdata ] && echo "[boot] userdata label ready at ${waited}s" && break
+    [ "$parts" -gt 0 ] && echo "[boot] partition nodes ready: $parts at ${waited}s" && break
+    sleep 1
+    waited=$((waited + 1))
+done
+
 echo "[boot] Finding root filesystem..."
 ROOT_DEV=$(find_root || true)
 
@@ -242,11 +263,15 @@ fi
 # Make /run available in new root
 mkdir -p /sysroot/run
 
-echo '[boot] Clearing framebuffer (prevent garbled display)...'
-# Clear fb0 to black so HelixScreen/DRM starts with a clean canvas
-if [ -c /dev/fb0 ]; then
-    dd if=/dev/zero of=/dev/fb0 bs=4096 count=4096 2>/dev/null || true
-    echo '[boot] fb0 cleared'
+if cmdline_has razer_fb_clear=0; then
+    echo '[boot] Preserving framebuffer content (razer_fb_clear=0)...'
+else
+    echo '[boot] Clearing framebuffer (prevent garbled display)...'
+    # Clear fb0 to black so HelixScreen/fbdev starts with a clean canvas.
+    if [ -c /dev/fb0 ]; then
+        dd if=/dev/zero of=/dev/fb0 bs=4096 count=4096 2>/dev/null || true
+        echo '[boot] fb0 cleared'
+    fi
 fi
 
 echo '[boot] Switching to real root...'

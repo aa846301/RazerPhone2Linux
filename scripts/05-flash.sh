@@ -4,7 +4,7 @@
 # ==========================================================================
 # Flashes the built images to the Razer Phone 2 via fastboot.
 #
-# Usage: bash 05-flash.sh [--unlock]
+# Usage: RAZER_IMAGE_PROFILE=printer bash 05-flash.sh [--unlock]
 #   --unlock: Also unlock the bootloader (WILL WIPE ALL DATA)
 #
 # Prerequisites:
@@ -15,8 +15,11 @@
 
 set -euo pipefail
 
-WORKDIR="$HOME/razorphone2linux"
-OUTPUT_DIR="$WORKDIR/output"
+WORKDIR="${RAZER_WORKDIR:-$HOME/razorphone2linux}"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$PROJECT_DIR/config/build.env"
+IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-printer}"
+OUTPUT_DIR="$WORKDIR/output/$IMAGE_PROFILE"
 
 BOOT_IMG="$OUTPUT_DIR/boot.img"
 ROOTFS_IMG="$OUTPUT_DIR/rootfs-sparse.img"
@@ -73,7 +76,7 @@ fi
 
 echo ""
 echo "This will flash the following images:"
-echo "  boot.img     -> boot_a partition ($(du -h "$BOOT_IMG" | cut -f1))"
+echo "  boot.img     -> boot_a + boot_b partitions ($(du -h "$BOOT_IMG" | cut -f1))"
 echo "  rootfs       -> userdata partition ($(du -h "$ROOTFS_IMG" | cut -f1))"
 if [ -f "$VBMETA_IMG" ]; then
     echo "  vbmeta       -> vbmeta_a partition"
@@ -88,7 +91,8 @@ fi
 # Flash boot image
 echo ""
 echo "[1/3] Flashing boot image..."
-fastboot flash boot "$BOOT_IMG"
+fastboot flash boot_a "$BOOT_IMG"
+fastboot flash boot_b "$BOOT_IMG"
 echo "  Boot image flashed."
 
 # Flash rootfs to userdata

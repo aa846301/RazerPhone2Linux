@@ -5,8 +5,8 @@
 - **ADB/Fastboot**: Install Android Platform Tools
 - **Unlocked bootloader**: `fastboot flashing unlock`
 - All image files in `output/` directory:
-  - `boot.img` (16 MB) - Kernel + initramfs
-  - `rootfs-sparse.img` (2.5 GB) - Ubuntu 24.04 arm64 + KlipperScreen
+  - `boot.img` - Kernel + initramfs
+  - `rootfs-sparse.img` - Ubuntu 24.04 arm64 + Klipper/Moonraker/HelixScreen
   - `vbmeta_disabled.img` (4 KB) - Disabled verified boot
 
 ## Flashing Steps
@@ -21,28 +21,16 @@ Or power off, then hold **Volume Down + Power** until fastboot screen appears.
 
 ### 2. Flash vbmeta (Disable Verified Boot)
 
-```
-fastboot --disable-verity --disable-verification flash vbmeta vbmeta_disabled.img
-```
-
-### 3. Flash Boot Image
-
-```
-fastboot flash boot boot.img
+```powershell
+fastboot --disable-verity --disable-verification flash vbmeta output\printer\vbmeta_disabled.img
 ```
 
-### 4. Flash Rootfs to Userdata
+### 3. Flash Boot A/B and Rootfs
 
 > **WARNING**: This erases all Android data on the phone!
 
-```
-fastboot flash userdata rootfs-sparse.img
-```
-
-### 5. Reboot
-
-```
-fastboot reboot
+```powershell
+fastboot flash boot_a output\printer\boot.img && fastboot flash boot_b output\printer\boot.img && fastboot flash userdata output\printer\rootfs-sparse.img && fastboot reboot
 ```
 
 ## Login Credentials
@@ -61,30 +49,34 @@ USB CDC ACM serial gadget (`ttyGS0`) is also enabled for USB serial access.
 
 - **NetworkManager** is enabled for WiFi/Ethernet management
 - **SSH** is enabled (port 22)
+- USB gadget brings up ACM serial plus NCM ethernet. The device side uses
+  `usb0 = 192.168.137.133/24`; set the Windows host side to `192.168.137.1/24`
+  if it does not receive a usable address automatically.
 
-## KlipperScreen
+## HelixScreen
 
-KlipperScreen auto-starts via `xinit-klipperscreen.service` on boot.
-Configuration: `/home/klipper/KlipperScreen.conf`
-Default Moonraker URL: `http://localhost:7125`
+HelixScreen is installed in `/home/klipper/helixscreen` and starts through
+`helixscreen.service`. The rootfs forces `HELIX_DISPLAY_BACKEND=fbdev` so the
+UI uses the bootloader framebuffer path instead of requiring MDSS/DSI panel
+bring-up.
 
-Edit the config to point to your Klipper host:
-```
-[main]
-moonraker_host = <your-klipper-ip>
-moonraker_port = 7125
-```
+Moonraker listens on `localhost:7125`; Klipper and Moonraker are enabled as
+systemd services.
 
 ## Known Limitations
 
-- **No WiFi/GPU firmware**: Firmware blobs were not included. WiFi and GPU acceleration won't work until firmware is extracted from the stock ROM.
-- **Display**: Uses the NT36830-based panel driver. Should work with the mainline DRM/MSM driver.
+- **Display**: The practical path is bootloader framebuffer -> simpledrm/fbdev
+  -> HelixScreen. The NT36830 dual-DSI/DSC panel driver is experimental and is
+  not the default boot path.
+- **Firmware**: WiFi requires Qualcomm firmware under `firmware/` before
+  rebuilding rootfs.
 
 ## Troubleshooting
 
 ### Phone doesn't boot
 - Ensure vbmeta was flashed with verification disabled
-- Try `fastboot flash boot boot.img` again
+- Reflash both boot slots:
+  `fastboot flash boot_a output\printer\boot.img && fastboot flash boot_b output\printer\boot.img && fastboot reboot`
 
 ### No display output
 - Connect via USB serial (`ttyGS0`) or SSH to debug

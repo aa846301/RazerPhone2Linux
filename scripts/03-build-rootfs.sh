@@ -15,20 +15,60 @@
 
 set -euo pipefail
 
-WORKDIR="$HOME/razorphone2linux"
-OUTPUT_DIR="$WORKDIR/output"
+if [ -n "${RAZER_WORKDIR:-}" ]; then
+    WORKDIR="$RAZER_WORKDIR"
+elif [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    WORKDIR="$(eval echo "~$SUDO_USER")/razorphone2linux"
+else
+    WORKDIR="$HOME/razorphone2linux"
+fi
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$PROJECT_DIR/config/build.env"
+IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-printer}"
+case "$IMAGE_PROFILE" in
+    base|printer) ;;
+    *) echo "ERROR: RAZER_IMAGE_PROFILE must be base or printer."; exit 2 ;;
+esac
+OUTPUT_DIR="$WORKDIR/output/$IMAGE_PROFILE"
 ROOTFS_DIR="$WORKDIR/rootfs"
-ROOTFS_IMG="$ROOTFS_DIR/rootfs-noble.img"
-CHROOT_DIR="$ROOTFS_DIR/chroot"
-FIRMWARE_DIR="$WORKDIR/firmware"
-WIN_OUTPUT_DIR="/mnt/c/repo/razorphone2linux/output"
+ROOTFS_IMG="$ROOTFS_DIR/rootfs-noble-$IMAGE_PROFILE.img"
+CHROOT_DIR="$ROOTFS_DIR/chroot-$IMAGE_PROFILE"
+FIRMWARE_DIR="${FIRMWARE_DIR:-$PROJECT_DIR/firmware}"
+ROOTFS_PACKAGES_DIR="${ROOTFS_PACKAGES_DIR:-$PROJECT_DIR/rootfs-packages/arm64}"
+ROOTFS_BINARIES_DIR="${ROOTFS_BINARIES_DIR:-$PROJECT_DIR/rootfs-binaries/arm64}"
+WIN_OUTPUT_DIR="$PROJECT_DIR/output/$IMAGE_PROFILE"
 OUTPUT_ROOTFS_IMG="$OUTPUT_DIR/rootfs.img"
 
-# Kernel version (detect from modules_install)
-KERNEL_VERSION=$(ls "$OUTPUT_DIR/modules_install/lib/modules/" 2>/dev/null | head -1)
+mkdir -p "$OUTPUT_DIR" "$WIN_OUTPUT_DIR"
+
+cleanup_mounts() {
+    if mountpoint -q "$CHROOT_DIR/var/cache/razer-pip"; then umount "$CHROOT_DIR/var/cache/razer-pip" || true; fi
+    if mountpoint -q "$CHROOT_DIR/var/cache/apt/archives"; then umount "$CHROOT_DIR/var/cache/apt/archives" || true; fi
+    if mountpoint -q "$CHROOT_DIR/dev/pts"; then umount "$CHROOT_DIR/dev/pts" || true; fi
+    if mountpoint -q "$CHROOT_DIR/proc"; then umount "$CHROOT_DIR/proc" || true; fi
+    if mountpoint -q "$CHROOT_DIR/sys"; then umount "$CHROOT_DIR/sys" || true; fi
+    if mountpoint -q "$CHROOT_DIR/dev"; then umount "$CHROOT_DIR/dev" || true; fi
+    if mountpoint -q "$CHROOT_DIR"; then umount "$CHROOT_DIR" || true; fi
+}
+
+# Kernel version. Prefer the release written by 02-build-kernel.sh so rootfs
+# and boot packaging never silently consume different module directories.
+KERNEL_RELEASE_FILE="$OUTPUT_DIR/kernel.release"
+if [ -f "$KERNEL_RELEASE_FILE" ]; then
+    KERNEL_VERSION=$(tr -d '\r\n' < "$KERNEL_RELEASE_FILE")
+else
+    KERNEL_VERSION=$(ls "$OUTPUT_DIR/modules_install/lib/modules/" 2>/dev/null | head -1)
+fi
 if [ -z "$KERNEL_VERSION" ]; then
     echo "ERROR: No kernel modules found in $OUTPUT_DIR/modules_install/"
     echo "Please run 02-build-kernel.sh first."
+    exit 1
+fi
+
+if [ ! -d "$OUTPUT_DIR/modules_install/lib/modules/$KERNEL_VERSION" ]; then
+    echo "ERROR: kernel.release says '$KERNEL_VERSION' but modules are missing:"
+    echo "  $OUTPUT_DIR/modules_install/lib/modules/$KERNEL_VERSION"
+    echo "Run 02-build-kernel.sh and then rebuild rootfs with the same output directory."
     exit 1
 fi
 
@@ -36,13 +76,22 @@ HOSTNAME="razer-aura"
 USERNAME="klipper"
 # Default password - CHANGE THIS after first boot!
 USER_PASSWORD="klipper"
-ROOTFS_SIZE_GB=6
-MIRROR="https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports"
+if [ "$IMAGE_PROFILE" = "printer" ]; then
+    ROOTFS_SIZE_GB=6
+else
+    ROOTFS_SIZE_GB=4
+fi
+MIRROR="${RAZER_UBUNTU_MIRROR:-https://ports.ubuntu.com/ubuntu-ports}"
+DEBOOTSTRAP_CACHE_DIR="$WORKDIR/cache/debootstrap"
+APT_CACHE_DIR="$WORKDIR/cache/apt-archives"
+PIP_CACHE_DIR="$WORKDIR/cache/pip"
 
 echo "========================================"
 echo " Razer Phone 2 - Rootfs Builder"
 echo "========================================"
 echo "Distribution: Ubuntu Noble 24.04 ARM64"
+echo "Profile:      $IMAGE_PROFILE"
+echo "APT mirror:   $MIRROR"
 echo "Kernel:       $KERNEL_VERSION"
 echo "Image size:   ${ROOTFS_SIZE_GB}GB"
 echo "Hostname:     $HOSTNAME"
@@ -54,12 +103,16 @@ if [ "$EUID" -ne 0 ]; then
     echo "ERROR: This script must be run as root (sudo)."
     exit 1
 fi
+trap cleanup_mounts EXIT
+
+"$PROJECT_DIR/scripts/register-binfmt.sh"
 
 # -------------------------------------------------------
 # Step 1: Create rootfs image
 # -------------------------------------------------------
 echo "[1/10] Creating ${ROOTFS_SIZE_GB}GB rootfs image..."
-mkdir -p "$ROOTFS_DIR" "$CHROOT_DIR"
+mkdir -p "$ROOTFS_DIR" "$CHROOT_DIR" "$DEBOOTSTRAP_CACHE_DIR" "$APT_CACHE_DIR" "$PIP_CACHE_DIR"
+cleanup_mounts
 
 dd if=/dev/zero of="$ROOTFS_IMG" bs=1G count="$ROOTFS_SIZE_GB" status=progress
 mkfs.ext4 -L rootfs "$ROOTFS_IMG"
@@ -67,11 +120,14 @@ mkfs.ext4 -L rootfs "$ROOTFS_IMG"
 mount "$ROOTFS_IMG" "$CHROOT_DIR"
 echo "  Rootfs image mounted at $CHROOT_DIR"
 
+install -d "$CHROOT_DIR/usr/bin"
+cp -f /usr/bin/qemu-aarch64-static "$CHROOT_DIR/usr/bin/qemu-aarch64-static"
+
 # -------------------------------------------------------
 # Step 2: Debootstrap base system
 # -------------------------------------------------------
 echo "[2/10] Running debootstrap (this takes several minutes)..."
-debootstrap --arch arm64 noble "$CHROOT_DIR" "$MIRROR"
+debootstrap --cache-dir="$DEBOOTSTRAP_CACHE_DIR" --arch arm64 noble "$CHROOT_DIR" "$MIRROR"
 echo "  Base system installed."
 
 # -------------------------------------------------------
@@ -82,34 +138,65 @@ mount --bind /proc "$CHROOT_DIR/proc"
 mount --bind /dev "$CHROOT_DIR/dev"
 mount --bind /dev/pts "$CHROOT_DIR/dev/pts"
 mount --bind /sys "$CHROOT_DIR/sys"
+mkdir -p "$CHROOT_DIR/var/cache/apt/archives"
+mount --bind "$APT_CACHE_DIR" "$CHROOT_DIR/var/cache/apt/archives"
+mkdir -p "$CHROOT_DIR/var/cache/razer-pip"
+mount --bind "$PIP_CACHE_DIR" "$CHROOT_DIR/var/cache/razer-pip"
 
 # -------------------------------------------------------
-# Step 4: Configure APT sources (Tsinghua mirror)
+# Step 4: Configure APT sources
 # -------------------------------------------------------
 echo "[4/10] Configuring APT sources..."
-cat > "$CHROOT_DIR/etc/apt/sources.list" << 'APT_EOF'
-# Ubuntu Ports (ARM64) - Tsinghua Mirror
-deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ noble main restricted universe multiverse
-deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ noble-updates main restricted universe multiverse
-deb https://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports/ noble-backports main restricted universe multiverse
-
-# Security updates (official)
-deb http://ports.ubuntu.com/ubuntu-ports/ noble-security main restricted universe multiverse
+cat > "$CHROOT_DIR/etc/apt/sources.list" << APT_EOF
+# Ubuntu Ports (ARM64). Set RAZER_UBUNTU_MIRROR to override this official
+# global endpoint with a closer regional mirror.
+deb $MIRROR noble main restricted universe multiverse
+deb $MIRROR noble-updates main restricted universe multiverse
+deb $MIRROR noble-backports main restricted universe multiverse
+deb $MIRROR noble-security main restricted universe multiverse
 APT_EOF
+
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/usb-gadget-setup.sh" \
+    "$CHROOT_DIR/usr/local/bin/usb-gadget-setup.sh"
+if [ -f "$PROJECT_DIR/config/device.env" ]; then
+    install -D -m 0600 \
+        "$PROJECT_DIR/config/device.env" \
+        "$CHROOT_DIR/etc/razerphone2linux/device.env"
+fi
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/razer-wifi-ready.sh" \
+    "$CHROOT_DIR/usr/local/sbin/razer-wifi-ready"
+if [ -f "$ROOTFS_PACKAGES_DIR/tqftpserv_1.0-5_arm64.deb" ]; then
+    cp -f "$ROOTFS_PACKAGES_DIR/tqftpserv_1.0-5_arm64.deb" \
+        "$CHROOT_DIR/tmp/tqftpserv_1.0-5_arm64.deb"
+fi
+if [ -f "$ROOTFS_BINARIES_DIR/rmtfs-razer-test" ]; then
+    install -D -m 0755 "$ROOTFS_BINARIES_DIR/rmtfs-razer-test" \
+        "$CHROOT_DIR/usr/local/bin/rmtfs-razer-test"
+fi
+if [ -f "$ROOTFS_BINARIES_DIR/pd-mapper" ]; then
+    install -D -m 0755 "$ROOTFS_BINARIES_DIR/pd-mapper" \
+        "$CHROOT_DIR/usr/local/bin/pd-mapper"
+fi
 
 # -------------------------------------------------------
 # Step 5: Configure system inside chroot
 # -------------------------------------------------------
 echo "[5/10] Configuring system inside chroot..."
 
-cat > "$CHROOT_DIR/tmp/setup.sh" << SETUP_EOF
+cat > "$CHROOT_DIR/tmp/setup.sh" << 'SETUP_EOF'
 #!/bin/bash
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive
+: "${ROOTFS_HOSTNAME:?}"
+: "${ROOTFS_USERNAME:?}"
+: "${ROOTFS_USER_PASSWORD:?}"
 
-# Update package lists
-apt update && apt upgrade -y
+# Update package lists. Avoid full apt upgrade in the QEMU chroot path; it is
+# slow and can stall bring-up without improving the boot/rootfs contract.
+apt update
 
 # Set locale
 apt install -y locales
@@ -123,10 +210,10 @@ ln -s /usr/share/zoneinfo/Asia/Taipei /etc/localtime
 echo "Asia/Taipei" > /etc/timezone
 
 # Set hostname
-echo '$HOSTNAME' > /etc/hostname
+echo "$ROOTFS_HOSTNAME" > /etc/hostname
 cat > /etc/hosts << HOSTS_EOF
 127.0.0.1   localhost
-127.0.1.1   $HOSTNAME
+127.0.1.1   $ROOTFS_HOSTNAME
 
 ::1         localhost ip6-localhost ip6-loopback
 HOSTS_EOF
@@ -143,12 +230,12 @@ FSTAB_EOF
 apt purge -y netplan.io 2>/dev/null || true
 
 # Create user
-useradd -m -s /bin/bash $USERNAME
-echo "$USERNAME:$USER_PASSWORD" | chpasswd
-usermod -aG sudo $USERNAME
+useradd -m -s /bin/bash "$ROOTFS_USERNAME"
+echo "$ROOTFS_USERNAME:$ROOTFS_USER_PASSWORD" | chpasswd
+usermod -aG sudo "$ROOTFS_USERNAME"
 
 # Set root password (same as user for convenience - change later!)
-echo "root:$USER_PASSWORD" | chpasswd
+echo "root:$ROOTFS_USER_PASSWORD" | chpasswd
 
 # Install essential packages
 # rmtfs: Qualcomm remote filesystem daemon - modem/WiFi firmware loader depends on this
@@ -176,7 +263,21 @@ apt install -y \
     ca-certificates \
     gnupg
 
+# Install repo-controlled ARM64 packages that are not consistently available
+# from the enabled Ubuntu package set during cached validation builds.
+if [ -f /tmp/tqftpserv_1.0-5_arm64.deb ]; then
+    apt install -y /tmp/tqftpserv_1.0-5_arm64.deb
+    rm -f /tmp/tqftpserv_1.0-5_arm64.deb
+else
+    echo "WARNING: tqftpserv package missing from rootfs package overlay"
+fi
+
 # Enable NetworkManager
+mkdir -p /etc/NetworkManager/conf.d
+cat > /etc/NetworkManager/conf.d/10-unmanaged-usb-gadget.conf << 'NM_USB_EOF'
+[keyfile]
+unmanaged-devices=interface-name:usb0
+NM_USB_EOF
 systemctl enable NetworkManager
 
 # Enable SSH
@@ -237,60 +338,12 @@ WantedBy=multi-user.target
 USB_EOF
 systemctl enable serial-getty@ttyGS0.service
 
-# -------------------------------------------------------
-# USB ACM serial gadget (Windows-visible debug console)
-# -------------------------------------------------------
-cat > /usr/local/bin/usb-gadget-setup.sh << 'GADGET_EOF'
-#!/bin/bash
-set -euo pipefail
-
-log() { echo "usb-gadget: $*" > /dev/kmsg 2>/dev/null || true; }
-
-UDC=""
-for _ in $(seq 1 30); do
-    UDC=$(ls /sys/class/udc 2>/dev/null | head -n 1 || true)
-    [ -n "$UDC" ] && break
-    sleep 0.2
-done
-
-if [ -z "$UDC" ]; then
-    log "no UDC available"
-    exit 0
-fi
-
-mountpoint -q /sys/kernel/config || mount -t configfs none /sys/kernel/config
-
-GADGET=/sys/kernel/config/usb_gadget/g1
-if [ -d "$GADGET" ]; then
-    echo "" > "$GADGET/UDC" 2>/dev/null || true
-    find "$GADGET/configs" -type l -delete 2>/dev/null || true
-fi
-
-mkdir -p "$GADGET/strings/0x409" "$GADGET/configs/c.1/strings/0x409"
-echo 0x18d1 > "$GADGET/idVendor"
-echo 0x4ee7 > "$GADGET/idProduct"
-echo 0x0200 > "$GADGET/bcdUSB"
-echo 0x0100 > "$GADGET/bcdDevice"
-echo 0x02 > "$GADGET/bDeviceClass"
-echo 0x02 > "$GADGET/bDeviceSubClass"
-echo 0x01 > "$GADGET/bDeviceProtocol"
-echo "Razer" > "$GADGET/strings/0x409/manufacturer"
-echo "Razer Phone 2 Linux Console" > "$GADGET/strings/0x409/product"
-echo "aura-linux" > "$GADGET/strings/0x409/serialnumber"
-echo "ACM serial console" > "$GADGET/configs/c.1/strings/0x409/configuration"
-echo 120 > "$GADGET/configs/c.1/MaxPower"
-
-mkdir -p "$GADGET/functions/acm.usb0"
-ln -sf "$GADGET/functions/acm.usb0" "$GADGET/configs/c.1/acm.usb0"
-echo "$UDC" > "$GADGET/UDC"
-log "bound ACM serial gadget to $UDC"
-GADGET_EOF
-chmod +x /usr/local/bin/usb-gadget-setup.sh
-
 cat > /etc/systemd/system/usb-gadget.service << 'GADGET_SERVICE_EOF'
 [Unit]
-Description=USB ACM serial gadget
-After=local-fs.target
+Description=USB ACM serial + NCM ethernet gadget
+DefaultDependencies=no
+After=systemd-modules-load.service local-fs.target
+Before=sysinit.target
 Before=serial-getty@ttyGS0.service
 
 [Service]
@@ -299,7 +352,7 @@ RemainAfterExit=yes
 ExecStart=/usr/local/bin/usb-gadget-setup.sh
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=sysinit.target
 GADGET_SERVICE_EOF
 systemctl enable usb-gadget.service
 
@@ -307,7 +360,7 @@ mkdir -p /etc/systemd/system/serial-getty@ttyGS0.service.d
 cat > /etc/systemd/system/serial-getty@ttyGS0.service.d/after-usb-gadget.conf << 'GADGET_DROPIN_EOF'
 [Unit]
 After=usb-gadget.service
-Requires=usb-gadget.service
+Wants=usb-gadget.service
 GADGET_DROPIN_EOF
 
 # -------------------------------------------------------
@@ -315,15 +368,18 @@ GADGET_DROPIN_EOF
 # -------------------------------------------------------
 cat > /etc/modules-load.d/razer-aura.conf << 'MODULES_EOF'
 # Razer Phone 2 kernel modules
-# Full display stack. simpledrm keeps the splash/framebuffer alive before
-# these probe, which makes panel bring-up failures recoverable over serial/SSH.
-msm
-panel-novatek-nt36830
+# Keep MDSS/DSI/MSM DRM out of the default path. The practical display path is
+# bootloader framebuffer -> simpledrm/fbdev -> HelixScreen.
 # WiFi
+qcom_sysmon
+qcom_q6v5_mss
+ath10k_core
 ath10k_snoc
 # Touchscreen
 rmi_i2c
 MODULES_EOF
+
+rm -f /etc/modprobe.d/razer-late-modem-test.conf
 
 # -------------------------------------------------------
 # Disable unnecessary services for faster boot
@@ -341,7 +397,21 @@ echo "System configuration complete."
 SETUP_EOF
 
 chmod +x "$CHROOT_DIR/tmp/setup.sh"
-chroot "$CHROOT_DIR" /tmp/setup.sh
+chroot "$CHROOT_DIR" /usr/bin/env \
+    ROOTFS_HOSTNAME="$HOSTNAME" \
+    ROOTFS_USERNAME="$USERNAME" \
+    ROOTFS_USER_PASSWORD="$USER_PASSWORD" \
+    /tmp/setup.sh
+
+# The distro package supplies the service unit and dependencies, but the
+# repo-controlled binary adds the Android firmware path aliases required by
+# Razer's modem/WLAN PD TFTP requests.
+if [ -f "$ROOTFS_BINARIES_DIR/tqftpserv" ]; then
+    install -D -m 0755 "$ROOTFS_BINARIES_DIR/tqftpserv" \
+        "$CHROOT_DIR/usr/bin/tqftpserv"
+else
+    echo "WARNING: patched tqftpserv missing from $ROOTFS_BINARIES_DIR"
+fi
 
 # -------------------------------------------------------
 # Step 6: Install kernel modules
@@ -353,6 +423,7 @@ rsync -av --progress \
 
 # Run depmod inside chroot
 chroot "$CHROOT_DIR" depmod -a "$KERNEL_VERSION"
+echo "$KERNEL_VERSION" > "$OUTPUT_DIR/rootfs.kernel-release"
 
 echo "  Kernel modules installed."
 
@@ -386,7 +457,7 @@ if [ -d "$FIRMWARE_DIR" ] && [ "$(ls -A "$FIRMWARE_DIR" 2>/dev/null)" ]; then
 else
     echo "  NOTE: $FIRMWARE_DIR is empty."
     echo "  WiFi (ath10k), GPU (a630_zap), ADSP, CDSP will not work until"
-    echo "  you run wsl-scripts/extract-qcom-firmware.sh and rebuild rootfs."
+    echo "  you run scripts/extract-modem-firmware.sh and rebuild rootfs."
 fi
 
 # 7b: WCN3990 WiFi firmware from linux-firmware (open-source, no ROM needed).
@@ -396,7 +467,9 @@ ATH10K_DIR="$CHROOT_DIR/usr/lib/firmware/ath10k/WCN3990/hw1.0"
 mkdir -p "$ATH10K_DIR"
 
 for fw_file in firmware-5.bin board.bin board-2.bin; do
-    if wget -q --timeout=30 -O "$ATH10K_DIR/$fw_file" \
+    if [ -s "$ATH10K_DIR/$fw_file" ]; then
+        echo "  Keeping existing $fw_file ($(du -h "$ATH10K_DIR/$fw_file" | cut -f1))"
+    elif wget -q --timeout=30 -O "$ATH10K_DIR/$fw_file" \
             "${LINUX_FW_BASE}/ath10k/WCN3990/hw1.0/${fw_file}"; then
         echo "  Downloaded $fw_file ($(du -h "$ATH10K_DIR/$fw_file" | cut -f1))"
     else
@@ -418,174 +491,50 @@ else
 fi
 
 # -------------------------------------------------------
-# Step 8: Install KlipperScreen dependencies
+# Step 8/9: Install final target userspace
 # -------------------------------------------------------
-echo "[8/10] Installing KlipperScreen dependencies..."
-cat > "$CHROOT_DIR/tmp/install-klipperscreen-deps.sh" << 'KS_EOF'
-#!/bin/bash
-set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
-
-# X11 display server (minimal, for KlipperScreen)
-apt install -y \
-    xserver-xorg-core \
-    xinit \
-    xinput \
-    x11-xserver-utils \
-    xserver-xorg-input-evdev \
-    xserver-xorg-input-libinput \
-    xserver-xorg-video-fbdev \
-    xserver-xorg-legacy
-
-# Python and GTK dependencies for KlipperScreen
-apt install -y \
-    python3-venv \
-    python3-dev \
-    python3-gi \
-    python3-gi-cairo \
-    python3-cairo \
-    gir1.2-gtk-3.0 \
-    libgirepository1.0-dev \
-    gcc \
-    libcairo2-dev \
-    pkg-config \
-    librsvg2-common \
-    libopenjp2-7 \
-    libdbus-glib-1-dev \
-    autoconf
-
-# Additional useful packages
-apt install -y \
-    git \
-    python3-pip
-
-apt clean
-KS_EOF
-
-chmod +x "$CHROOT_DIR/tmp/install-klipperscreen-deps.sh"
-chroot "$CHROOT_DIR" /tmp/install-klipperscreen-deps.sh
-
-echo "  KlipperScreen dependencies installed."
-
-# -------------------------------------------------------
-# Step 9: Install and configure KlipperScreen
-# -------------------------------------------------------
-echo "[9/10] Installing KlipperScreen..."
-cat > "$CHROOT_DIR/tmp/install-klipperscreen.sh" << 'KSINSTALL_EOF'
-#!/bin/bash
-set -euo pipefail
-
-KS_USER="klipper"
-KS_HOME="/home/$KS_USER"
-
-# Clone KlipperScreen
-cd "$KS_HOME"
-if [ ! -d "KlipperScreen" ]; then
-    su -c "git clone https://github.com/KlipperScreen/KlipperScreen.git" "$KS_USER"
+if [ "$IMAGE_PROFILE" = "printer" ]; then
+    echo "[8/10] Installing Klipper + Moonraker + HelixScreen..."
+    cp -f "$PROJECT_DIR/rootfs-scripts/install-final-target.sh" "$CHROOT_DIR/tmp/install-final-target.sh"
+    cp -f "$PROJECT_DIR/config/userspace.env" "$CHROOT_DIR/tmp/userspace.env"
+    chmod +x "$CHROOT_DIR/tmp/install-final-target.sh"
+    chroot "$CHROOT_DIR" /usr/bin/env \
+        PIP_INDEX_URL=https://pypi.org/simple \
+        PIP_CACHE_DIR=/var/cache/razer-pip \
+        /tmp/install-final-target.sh
+    chroot "$CHROOT_DIR" /bin/sh -c \
+        'pkill -x helix-watchdog 2>/dev/null || true; pkill -x helix-screen 2>/dev/null || true; pkill -x helix-splash 2>/dev/null || true'
+    echo "  Printer userspace installed."
+else
+    echo "[8/10] Base profile selected; skipping Klipper/Moonraker/HelixScreen."
 fi
 
-# Create Python virtual environment and install dependencies
-su -c "python3 -m venv $KS_HOME/.KlipperScreen-env" "$KS_USER"
-su -c "$KS_HOME/.KlipperScreen-env/bin/pip install --upgrade pip" "$KS_USER"
-su -c "$KS_HOME/.KlipperScreen-env/bin/pip install -r $KS_HOME/KlipperScreen/scripts/KlipperScreen-requirements.txt" "$KS_USER"
-
-# -------------------------------------------------------
-# Create X11 auto-start service
-# -------------------------------------------------------
-cat > /etc/systemd/system/xinit-klipperscreen.service << 'XINIT_EOF'
-[Unit]
-Description=X11 Display Server for KlipperScreen
-After=systemd-user-sessions.service
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=klipper
-Environment="DISPLAY=:0"
-# Start X11 with minimal configuration, no screen blanking
-ExecStart=/usr/bin/xinit /home/klipper/.KlipperScreen-env/bin/python /home/klipper/KlipperScreen/screen.py -- :0 vt1 -keeptty -noreset -dpms
-Restart=on-failure
-RestartSec=5s
-# Allow X to access display hardware
-SupplementaryGroups=video input render tty
-
-[Install]
-WantedBy=multi-user.target
-XINIT_EOF
-
-# Enable auto-start
-systemctl enable xinit-klipperscreen.service
-
-# -------------------------------------------------------
-# Configure X11
-# -------------------------------------------------------
-# Allow non-root X server
-cat > /etc/X11/Xwrapper.config << 'XWRAP_EOF'
-allowed_users=anybody
-needs_root_rights=yes
-XWRAP_EOF
-
-# Disable screen blanking and DPMS in X11
-mkdir -p "$KS_HOME/.xinitrc.d"
-cat > "$KS_HOME/.xinitrc" << 'XINITRC_EOF'
-#!/bin/sh
-# Disable screen blanking and DPMS
-xset s off
-xset -dpms
-xset s noblank
-
-# Disable touchscreen right-click emulation
-# (adjust event device as needed after first boot)
-# xinput set-prop "Synaptics RMI4" "libinput Click Method Enabled" 1 0
-
-# Start KlipperScreen
-exec /home/klipper/.KlipperScreen-env/bin/python /home/klipper/KlipperScreen/screen.py
-XINITRC_EOF
-chown "$KS_USER:$KS_USER" "$KS_HOME/.xinitrc"
-chmod +x "$KS_HOME/.xinitrc"
-
-# -------------------------------------------------------
-# Create default KlipperScreen config
-# -------------------------------------------------------
-mkdir -p "$KS_HOME/printer_data/config"
-cat > "$KS_HOME/printer_data/config/KlipperScreen.conf" << 'KSCONF_EOF'
-# KlipperScreen Configuration for Razer Phone 2
-# Adjust moonraker_host/port to match your Klipper setup
-
-[main]
-# Time format: 24h
-24htime: True
-
-# Screen blanking timeout (0 = disabled)
-screen_blanking: off
-
-# Moonraker connection (adjust IP to your Klipper host)
-moonraker_host: 127.0.0.1
-moonraker_port: 7125
-
-[printer Printer]
-moonraker_host: 127.0.0.1
-moonraker_port: 7125
-KSCONF_EOF
-chown -R "$KS_USER:$KS_USER" "$KS_HOME/printer_data"
-
-echo "KlipperScreen installation complete."
-KSINSTALL_EOF
-
-chmod +x "$CHROOT_DIR/tmp/install-klipperscreen.sh"
-chroot "$CHROOT_DIR" /tmp/install-klipperscreen.sh
-
-echo "  KlipperScreen installed and configured for auto-start."
+# Keep the full build and validation refresh on the same runtime overlay path.
+# This must run after firmware and final userspace are installed so it can
+# create firmware aliases, enable tqftpserv, and install HelixScreen drop-ins
+# on the first reproducible build.
+echo "[9/10] Applying runtime config overlay..."
+cp -f "$PROJECT_DIR/rootfs-scripts/apply-runtime-config.sh" "$CHROOT_DIR/tmp/apply-runtime-config.sh"
+chmod +x "$CHROOT_DIR/tmp/apply-runtime-config.sh"
+chroot "$CHROOT_DIR" /tmp/apply-runtime-config.sh
 
 # -------------------------------------------------------
 # Step 10: Cleanup and unmount
 # -------------------------------------------------------
 echo "[10/10] Cleaning up and creating sparse image..."
 
-# Final cleanup inside chroot
-chroot "$CHROOT_DIR" bash -c "apt clean && rm -rf /tmp/* && rm -f /var/cache/apt/archives/*.deb"
+# Final cleanup inside chroot. Do not run apt clean here: /var/cache/apt/archives
+# is a host-side bind mount used to speed up future full rootfs builds.
+chroot "$CHROOT_DIR" bash -c "
+    rm -rf /tmp/* /var/tmp/*
+    rm -rf /home/klipper/helixscreen.old /home/klipper/.cache/pip
+    rm -rf /var/lib/apt/lists/*
+    find /var/log -type f -exec truncate -s 0 {} +
+"
 
 # Unmount virtual filesystems
+umount "$CHROOT_DIR/var/cache/apt/archives" 2>/dev/null || true
+umount "$CHROOT_DIR/var/cache/razer-pip" 2>/dev/null || true
 umount "$CHROOT_DIR/proc" 2>/dev/null || true
 umount "$CHROOT_DIR/dev/pts" 2>/dev/null || true
 umount "$CHROOT_DIR/dev" 2>/dev/null || true
@@ -593,6 +542,18 @@ umount "$CHROOT_DIR/sys" 2>/dev/null || true
 
 # Unmount rootfs
 umount "$CHROOT_DIR"
+
+# Compact free ext4 blocks before creating the Android sparse image. img2simg
+# only omits zero-filled blocks; stale non-zero free space makes userdata
+# flashes much slower without adding useful rootfs content.
+if command -v e2fsck >/dev/null 2>&1; then
+    e2fsck -fy "$ROOTFS_IMG"
+fi
+if command -v zerofree >/dev/null 2>&1; then
+    zerofree "$ROOTFS_IMG"
+else
+    echo "  WARNING: zerofree is not installed; rootfs-sparse.img may include stale ext4 free blocks."
+fi
 
 # Create Android sparse image for fastboot
 SPARSE_IMG="$OUTPUT_DIR/rootfs-sparse.img"
@@ -602,6 +563,10 @@ cp -f "$ROOTFS_IMG" "$OUTPUT_ROOTFS_IMG"
 mkdir -p "$WIN_OUTPUT_DIR"
 cp -f "$OUTPUT_ROOTFS_IMG" "$WIN_OUTPUT_DIR/rootfs.img"
 cp -f "$SPARSE_IMG" "$WIN_OUTPUT_DIR/rootfs-sparse.img"
+cp -f "$OUTPUT_DIR/rootfs.kernel-release" "$WIN_OUTPUT_DIR/rootfs.kernel-release"
+if [ -f "$KERNEL_RELEASE_FILE" ]; then
+    cp -f "$KERNEL_RELEASE_FILE" "$WIN_OUTPUT_DIR/kernel.release"
+fi
 
 echo ""
 echo "========================================"
@@ -619,7 +584,9 @@ echo "  Hostname: $HOSTNAME"
 echo "  SSH:      enabled"
 echo "  WiFi:     use 'nmtui' or 'nmcli' after boot"
 echo ""
-echo "  KlipperScreen: auto-starts on boot via xinit"
+echo "  Klipper:       klipper.service enabled"
+echo "  Moonraker:     moonraker.service enabled on port 7125"
+echo "  HelixScreen:   helixscreen.service enabled with fbdev backend"
 echo "  Serial debug:  ttyMSM0 (UART) and ttyGS0 (USB gadget)"
 echo ""
 echo "IMPORTANT: Change passwords after first boot!"
