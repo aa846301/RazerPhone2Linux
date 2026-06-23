@@ -41,6 +41,17 @@ udc=$(ls /sys/class/udc | head -n 1)
 echo "$udc" > "$g/UDC"
 sleep 2
 ifconfig usb0 192.168.137.133 netmask 255.255.255.0 up
+cat > /run/udhcpd.conf <<'EOF'
+start 192.168.137.1
+end 192.168.137.1
+interface usb0
+opt subnet 255.255.255.0
+opt lease 3600
+lease_file /run/udhcpd.leases
+pidfile /run/udhcpd.pid
+EOF
+touch /run/udhcpd.leases
+udhcpd /run/udhcpd.conf
 
 # UFS is built in on the SDM845 7.1 configuration. Wait for userdata and use
 # PARTLABEL first, then the known Razer partition as a fallback.
