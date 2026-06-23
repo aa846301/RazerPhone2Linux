@@ -614,7 +614,6 @@
 		/* Control GPIOs */
 		reset-gpios = <&tlmm 6 GPIO_ACTIVE_LOW>;
 		te-gpios = <&tlmm 10 GPIO_ACTIVE_HIGH>;
-		rotation = <90>;
 		/*
 		 * panel-mode-gpio (GPIO 52) selects dual DSI mode.
 		 * Confirmed from Android DTBO entry-05 qcom,panel-mode-gpio=52.

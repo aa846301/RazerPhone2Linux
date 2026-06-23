@@ -11,7 +11,7 @@ Implemented:
 - combined 1440x2560 modes at 60 Hz and 120 Hz;
 - 10-bpc DSC configuration at 8 bpp;
 - 12-bit DCS backlight updates sent to both DSI links;
-- panel orientation from DT (`rotation = <90>`);
+- standard optional panel orientation parsing from DT;
 - three-supply and reset-GPIO sequencing;
 - DT binding in `novatek,nt36830.yaml`.
 
@@ -26,6 +26,10 @@ Validated on the pinned `sdm845/7.1-dev` kernel:
 Physical scanout is not yet claimed as working. The next test must use a
 recoverable A/B boot image and serial/USB observation. The known-working 6.16
 WiFi/Helix image is documented in `../RECOVERY.md`.
+
+The Razer board DTS intentionally does not rotate the native DRM panel.
+The required 90-degree UI and touch transform belongs to HelixScreen and is
+set by `HELIX_DISPLAY_ROTATION=90` plus `/display/rotate = 90`.
 
 The generator remains available for reproducible factory-DT comparison:
 
