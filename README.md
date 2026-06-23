@@ -14,6 +14,10 @@ from Windows 11 through WSL Ubuntu 24.04.
   fragments.
 - Complete kernel releases build cleanly as `7.1.0-rc1-sdm845` and
   `7.1.0-rc1-sdm845-printer`.
+- The 7.1 boot enables the PMI8998 SMB2 charger, fuel gauge, and RRADC as
+  built-in drivers. The DTS uses the factory 4.4 V / 4000 mAh battery profile
+  with a conservative 2 A mainline charge limit. The image is offline
+  validated; physical charging validation is still pending.
 - USB NCM networking and SSH work at `192.168.137.133`.
 - Boot does not depend on a USB host: early logs stay on `ttyMSM0`, while
   `ttyGS0` remains an optional gadget serial login after userspace starts.

@@ -13,6 +13,9 @@
   `sdm845.config`、`misc.config`，最後才套 Razer/profile fragments。
 - base/printer 完整 kernel 已分別成功產生
   `7.1.0-rc1-sdm845` 與 `7.1.0-rc1-sdm845-printer`。
+- 7.1 boot 已將 PMI8998 SMB2 charger、fuel gauge 與 RRADC 編入 kernel；
+  DTS 採用原廠 4.4 V / 4000 mAh 電池資料，主線充電電流先保守限制為
+  2 A。映像已完成離線驗證，實機充電仍待手機恢復電量後確認。
 - USB NCM 網路與 SSH 可由 `192.168.137.133` 連線。
 - 開機不依賴 USB host：early log 固定走 `ttyMSM0`，`ttyGS0` 只作為
   userspace 啟動後的可選 USB gadget serial 登入介面。

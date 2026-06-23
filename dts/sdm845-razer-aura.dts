@@ -107,7 +107,13 @@
 
 		charge-full-design-microamp-hours = <4000000>;
 		voltage-min-design-microvolt = <3400000>;
-		voltage-max-design-microvolt = <4200000>;
+		/* Factory battery profile: 4.4 V, 4000 mAh. */
+		voltage-max-design-microvolt = <4400000>;
+		/*
+		 * Keep mainline USB DCP charging conservative.  The factory
+		 * downstream tree allows up to 3.9 A, but that policy also
+		 * depends on downstream JEITA and step-charging support.
+		 */
 		constant-charge-current-max-microamp = <2000000>;
 	};
 
@@ -744,14 +750,20 @@
 
 /*
  * ==========================================================================
- * PMI8998 Charger
+ * PMI8998 Charger and Fuel Gauge
  * ==========================================================================
- * Note: The Razer Phone 2 is modified with a direct 4.2V battery supply
- * via a protection board. The charger configuration is maintained for
- * battery monitoring purposes.
+ * Keep these enabled in the base device tree and build their drivers into
+ * the kernel. Charging must not depend on reaching userspace or loading a
+ * module from rootfs when the battery is already low.
  */
 &pmi8998_charger {
 	status = "okay";
+	monitored-battery = <&battery>;
+};
+
+&pmi8998_fg {
+	status = "okay";
+	power-supplies = <&pmi8998_charger>;
 	monitored-battery = <&battery>;
 };
 
