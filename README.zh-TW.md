@@ -12,6 +12,8 @@
 - base/printer 完整 kernel 已分別成功產生
   `7.1.0-rc1-sdm845` 與 `7.1.0-rc1-sdm845-printer`。
 - USB NCM 網路與 SSH 可由 `192.168.137.133` 連線。
+- 開機不依賴 USB host：early log 固定走 `ttyMSM0`，`ttyGS0` 只作為
+  userspace 啟動後的可選 USB gadget serial 登入介面。
 - 6.16 還原基線上的觸控、Klipper、Moonraker、HelixScreen 已可用。
 - NT36830 原生 dual-DSI/DSC DRM driver 已真正實作並連結進 7.1 kernel，
   提供 60/120 Hz mode 且通過 panel DT binding 檢查；刷機前仍需做實體

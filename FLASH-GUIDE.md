@@ -43,7 +43,8 @@ fastboot flash boot_a output\printer\boot.img && fastboot flash boot_b output\pr
 ## Serial Console
 
 The kernel is configured with serial console on `ttyMSM0` (115200 baud).
-USB CDC ACM serial gadget (`ttyGS0`) is also enabled for USB serial access.
+USB CDC ACM serial gadget (`ttyGS0`) is also enabled for USB serial access,
+but it is not an early console and boot never waits for a USB host or DTR.
 
 ## Network
 

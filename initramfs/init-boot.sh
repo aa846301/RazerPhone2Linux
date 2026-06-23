@@ -5,7 +5,6 @@
 PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export PATH
 
-USB_CONSOLE_ATTACHED=0
 USB_GADGET_READY=0
 
 ensure_ttygs0_node() {
@@ -15,14 +14,6 @@ ensure_ttygs0_node() {
     dev=$(cat /sys/class/tty/ttyGS0/dev 2>/dev/null)
     major=${dev%:*}; minor=${dev#*:}
     [ -n "$major" ] && [ -n "$minor" ] && mknod /dev/ttyGS0 c "$major" "$minor"
-}
-
-attach_usb_console() {
-    ensure_ttygs0_node
-    if [ "$USB_CONSOLE_ATTACHED" -eq 0 ] && [ -c /dev/ttyGS0 ]; then
-        exec >/dev/ttyGS0 2>&1
-        USB_CONSOLE_ATTACHED=1
-    fi
 }
 
 mount_fs() {
@@ -208,7 +199,6 @@ else
 fi
 
 setup_usb_gadget
-attach_usb_console
 
 echo '[boot] Razer Phone 2 - Starting Linux...'
 echo "[boot] kernel: $(uname -r)"
@@ -217,7 +207,6 @@ echo "[boot] kernel: $(uname -r)"
 waited=0
 while [ "$waited" -lt 40 ]; do
     setup_usb_gadget
-    attach_usb_console
     mdev -s 2>/dev/null || true
     [ -e /dev/sda ] && echo "[boot] /dev/sda found at ${waited}s" && break
     [ -e /dev/mmcblk0 ] && echo "[boot] /dev/mmcblk0 found at ${waited}s" && break

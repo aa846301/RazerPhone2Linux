@@ -12,6 +12,8 @@ from Windows 11 through WSL Ubuntu 24.04.
 - Complete kernel releases build cleanly as `7.1.0-rc1-sdm845` and
   `7.1.0-rc1-sdm845-printer`.
 - USB NCM networking and SSH work at `192.168.137.133`.
+- Boot does not depend on a USB host: early logs stay on `ttyMSM0`, while
+  `ttyGS0` remains an optional gadget serial login after userspace starts.
 - Touch, Klipper, Moonraker, and HelixScreen work on the preserved 6.16
   recovery baseline.
 - A native NT36830 dual-DSI/DSC DRM driver is now implemented and linked into
