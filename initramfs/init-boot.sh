@@ -5,6 +5,7 @@
 PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export PATH
 
+USB_CONSOLE_ATTACHED=0
 USB_GADGET_READY=0
 
 ensure_ttygs0_node() {
@@ -14,6 +15,14 @@ ensure_ttygs0_node() {
     dev=$(cat /sys/class/tty/ttyGS0/dev 2>/dev/null)
     major=${dev%:*}; minor=${dev#*:}
     [ -n "$major" ] && [ -n "$minor" ] && mknod /dev/ttyGS0 c "$major" "$minor"
+}
+
+attach_usb_console() {
+    ensure_ttygs0_node
+    if [ "$USB_CONSOLE_ATTACHED" -eq 0 ] && [ -c /dev/ttyGS0 ]; then
+        exec >/dev/ttyGS0 2>&1
+        USB_CONSOLE_ATTACHED=1
+    fi
 }
 
 mount_fs() {
@@ -51,6 +60,10 @@ setup_usb_gadget() {
     USB_GADGET_READY=1
     sleep 1
     ensure_ttygs0_node
+}
+
+cmdline_has() {
+    grep -qw "$1" /proc/cmdline 2>/dev/null
 }
 
 populate_partlabels() {
@@ -103,28 +116,49 @@ partition_count() {
 
 probe_root_candidate() {
     local candidate="$1" probe_dir=/run/root-probe
-    [ -b "$candidate" ] || return 1
+    echo "[boot] probing root candidate: $candidate" >&2
+    if [ ! -b "$candidate" ]; then
+        echo "[boot] candidate is not a block device: $candidate" >&2
+        return 1
+    fi
     mkdir -p "$probe_dir"
     umount "$probe_dir" 2>/dev/null || true
     # Try rw first (needed to replay ext4 journal), fall back to ro
     if ! mount -t ext4 -o rw "$candidate" "$probe_dir" 2>/dev/null; then
-        mount -t ext4 -o ro "$candidate" "$probe_dir" 2>/dev/null || return 1
+        echo "[boot] rw probe failed for $candidate, trying ro" >&2
+        if ! mount -t ext4 -o ro "$candidate" "$probe_dir" 2>/dev/null; then
+            echo "[boot] ext4 probe failed for $candidate" >&2
+            return 1
+        fi
     fi
     if [ -x "$probe_dir/usr/lib/systemd/systemd" ] || \
        [ -x "$probe_dir/sbin/init" ] || \
        [ -f "$probe_dir/etc/os-release" ]; then
         umount "$probe_dir" 2>/dev/null || true
+        echo "[boot] root candidate accepted: $candidate" >&2
         echo "$candidate"
         return 0
     fi
     umount "$probe_dir" 2>/dev/null || true
+    echo "[boot] ext4 ok but no Linux root found on $candidate" >&2
     return 1
 }
 
 find_root() {
     # 1. Parse root= from cmdline (supports PARTUUID=, /dev/..., by-partlabel/)
     local root_arg dev
-    root_arg=$(tr ' ' '\n' < /proc/cmdline | grep '^root=' | tail -1 | sed 's/root=//')
+    root_arg=$(
+        tr ' ' '\n' < /proc/cmdline |
+            grep '^root=' |
+            sed 's/root=//' |
+            grep -Ev '^(/dev/dm-|/dev/mapper/)' |
+            tail -1
+    )
+
+    if [ -z "$root_arg" ]; then
+        root_arg=/dev/disk/by-partlabel/userdata
+        echo "[boot] ignoring Android bootloader root, using $root_arg" >&2
+    fi
 
     case "$root_arg" in
         PARTUUID=*)
@@ -138,13 +172,23 @@ find_root() {
         /dev/disk/by-partlabel/*)
             local label="${root_arg#/dev/disk/by-partlabel/}"
             echo "[boot] cmdline wants partlabel: $label" >&2
+            # Razer Phone 2 userdata is /dev/sda14 in the factory GPT.  Prefer
+            # the direct block node in this tiny initramfs to avoid hangs in
+            # readlink/blkid over the large Android partition table.
+            if [ "$label" = "userdata" ]; then
+                echo "[boot] using fixed Razer userdata node /dev/sda14" >&2
+                probe_root_candidate /dev/sda14 && return 0
+            fi
             # Try via by-partlabel symlink (populated by populate_partlabels above)
             if [ -e "/dev/disk/by-partlabel/$label" ]; then
                 dev=$(readlink -f "/dev/disk/by-partlabel/$label" 2>/dev/null || echo "/dev/disk/by-partlabel/$label")
                 echo "[boot] $label -> $dev" >&2
                 probe_root_candidate "$dev" && return 0
+            else
+                echo "[boot] by-partlabel symlink not ready for $label" >&2
             fi
             # Try blkid search
+            echo "[boot] trying blkid PARTLABEL=$label" >&2
             dev=$(blkid -t "PARTLABEL=$label" -o device 2>/dev/null | head -1)
             if [ -n "$dev" ]; then
                 echo "[boot] blkid PARTLABEL=$label -> $dev" >&2
@@ -199,6 +243,7 @@ else
 fi
 
 setup_usb_gadget
+attach_usb_console
 
 echo '[boot] Razer Phone 2 - Starting Linux...'
 echo "[boot] kernel: $(uname -r)"
@@ -207,6 +252,7 @@ echo "[boot] kernel: $(uname -r)"
 waited=0
 while [ "$waited" -lt 40 ]; do
     setup_usb_gadget
+    attach_usb_console
     mdev -s 2>/dev/null || true
     [ -e /dev/sda ] && echo "[boot] /dev/sda found at ${waited}s" && break
     [ -e /dev/mmcblk0 ] && echo "[boot] /dev/mmcblk0 found at ${waited}s" && break
@@ -256,7 +302,7 @@ if cmdline_has razer_fb_clear=0; then
     echo '[boot] Preserving framebuffer content (razer_fb_clear=0)...'
 else
     echo '[boot] Clearing framebuffer (prevent garbled display)...'
-    # Clear fb0 to black so HelixScreen/fbdev starts with a clean canvas.
+    # Clear fb0 to black so the fbdev UI starts with a clean canvas.
     if [ -c /dev/fb0 ]; then
         dd if=/dev/zero of=/dev/fb0 bs=4096 count=4096 2>/dev/null || true
         echo '[boot] fb0 cleared'
@@ -264,12 +310,99 @@ else
 fi
 
 echo '[boot] Switching to real root...'
-umount /dev/pts 2>/dev/null || true
-umount /proc    2>/dev/null || true
-umount /sys     2>/dev/null || true
+
+if cmdline_has razer_chroot_shell=1; then
+    echo '[boot] Entering rootfs chroot shell (debug, no switch_root)...'
+    mkdir -p /sysroot/dev /sysroot/proc /sysroot/sys /sysroot/run
+    mount --bind /dev /sysroot/dev 2>/dev/null || true
+    mount --bind /proc /sysroot/proc 2>/dev/null || true
+    mount --bind /sys /sysroot/sys 2>/dev/null || true
+    mount --bind /run /sysroot/run 2>/dev/null || true
+    ensure_ttygs0_node
+    if [ -c /dev/ttyGS0 ]; then
+        exec /bin/busybox chroot /sysroot /bin/sh -i </dev/ttyGS0 >/dev/ttyGS0 2>&1
+    fi
+    exec /bin/busybox chroot /sysroot /bin/sh -i
+fi
+
+if cmdline_has razer_rootfs_debug_init=1; then
+    cat > /run/init-codex-debug <<'DEBUG_INIT_EOF'
+#!/bin/sh
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+if [ -c /dev/ttyGS0 ]; then
+    exec </dev/ttyGS0 >/dev/ttyGS0 2>&1
+fi
+
+echo '[rootfs-debug-init] started as PID 1'
+echo "[rootfs-debug-init] kernel: $(uname -r)"
+echo '[rootfs-debug-init] cmdline:'
+cat /proc/cmdline 2>/dev/null || true
+echo '[rootfs-debug-init] mounts:'
+mount | head -20
+echo '[rootfs-debug-init] /proc/filesystems cgroup lines:'
+grep -i cgroup /proc/filesystems 2>/dev/null || true
+echo '[rootfs-debug-init] cgroup mount probe:'
+mkdir -p /sys/fs/cgroup 2>/dev/null || true
+mount -t cgroup2 none /sys/fs/cgroup 2>&1 || true
+mount | grep -i cgroup 2>/dev/null || true
+echo '[rootfs-debug-init] essential pseudo-fs directories:'
+ls -ld /dev /proc /sys /run /sys/fs/cgroup 2>/dev/null || true
+echo '[rootfs-debug-init] rootfs:'
+cat /etc/os-release 2>/dev/null || true
+echo '[rootfs-debug-init] modules:'
+ls -la "/lib/modules/$(uname -r)" 2>/dev/null || true
+echo '[rootfs-debug-init] systemd binary:'
+ls -la /usr/lib/systemd/systemd /sbin/init /bin/sh 2>/dev/null || true
+echo '[rootfs-debug-init] systemd linked libraries:'
+ldd /usr/lib/systemd/systemd 2>/dev/null || true
+echo '[rootfs-debug-init] systemd offline test (max 12s, non-PID1):'
+if command -v timeout >/dev/null 2>&1; then
+    timeout 12s env SYSTEMD_LOG_LEVEL=debug /usr/lib/systemd/systemd --test --system 2>&1 | head -160 || true
+else
+    echo '[rootfs-debug-init] timeout command missing; skipping systemd --test to avoid hang'
+fi
+echo '[rootfs-debug-init] default target wants:'
+ls -la /etc/systemd/system/default.target.wants 2>/dev/null || true
+echo '[rootfs-debug-init] multi-user wants, first page:'
+ls -la /etc/systemd/system/multi-user.target.wants 2>/dev/null | head -80 || true
+echo '[rootfs-debug-init] last kernel messages:'
+dmesg | tail -80 2>/dev/null || true
+
+if grep -qw razer_exec_systemd=1 /proc/cmdline 2>/dev/null; then
+    echo '[rootfs-debug-init] exec systemd requested'
+    exec /usr/lib/systemd/systemd
+fi
+
+echo '[rootfs-debug-init] dropping to rootfs shell'
+exec /bin/sh -i
+DEBUG_INIT_EOF
+    chmod 0755 /run/init-codex-debug
+    mkdir -p /sysroot/dev /sysroot/proc /sysroot/sys /sysroot/run
+    mount --move /dev /sysroot/dev 2>/dev/null || true
+    mount --move /proc /sysroot/proc 2>/dev/null || true
+    mount --move /sys /sysroot/sys 2>/dev/null || true
+    mount --move /run /sysroot/run 2>/dev/null || true
+    exec switch_root -c /dev/ttyGS0 /sysroot /run/init-codex-debug
+fi
 
 # Use explicit path - bypasses klibc run-init symlink resolution bug
-exec switch_root /sysroot /usr/lib/systemd/systemd
+if cmdline_has razer_root_shell=1; then
+    mkdir -p /sysroot/dev /sysroot/proc /sysroot/sys /sysroot/run
+    mount --move /dev /sysroot/dev 2>/dev/null || true
+    mount --move /proc /sysroot/proc 2>/dev/null || true
+    mount --move /sys /sysroot/sys 2>/dev/null || true
+    mount --move /run /sysroot/run 2>/dev/null || true
+    exec switch_root -c /dev/ttyGS0 /sysroot /bin/sh -i
+else
+    mkdir -p /sysroot/dev /sysroot/proc /sysroot/sys /sysroot/run
+    mount --move /dev /sysroot/dev 2>/dev/null || true
+    mount --move /proc /sysroot/proc 2>/dev/null || true
+    mount --move /sys /sysroot/sys 2>/dev/null || true
+    mount --move /run /sysroot/run 2>/dev/null || true
+    exec switch_root -c /dev/ttyGS0 /sysroot /usr/lib/systemd/systemd
+fi
 
 echo '[boot] ERROR: switch_root failed!'
 exec /bin/sh

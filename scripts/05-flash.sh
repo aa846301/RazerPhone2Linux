@@ -4,7 +4,7 @@
 # ==========================================================================
 # Flashes the built images to the Razer Phone 2 via fastboot.
 #
-# Usage: RAZER_IMAGE_PROFILE=printer bash 05-flash.sh [--unlock]
+# Usage: bash 05-flash.sh [--unlock]
 #   --unlock: Also unlock the bootloader (WILL WIPE ALL DATA)
 #
 # Prerequisites:
@@ -18,7 +18,7 @@ set -euo pipefail
 WORKDIR="${RAZER_WORKDIR:-$HOME/razorphone2linux}"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$PROJECT_DIR/config/build.env"
-IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-printer}"
+IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-base}"
 OUTPUT_DIR="$WORKDIR/output/$IMAGE_PROFILE"
 
 BOOT_IMG="$OUTPUT_DIR/boot.img"
@@ -126,7 +126,7 @@ echo ""
 echo "Access methods:"
 echo "  1. USB Serial: screen /dev/ttyACM0 115200 (from host PC)"
 echo "  2. SSH via WiFi: ssh klipper@<ip_address>"
-echo "  3. Touch screen: KlipperScreen should auto-start"
+
 echo ""
 echo "Default credentials: klipper / klipper"
 echo "CHANGE PASSWORDS IMMEDIATELY after first login!"

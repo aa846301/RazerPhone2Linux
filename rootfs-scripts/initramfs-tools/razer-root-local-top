@@ -1,0 +1,40 @@
+#!/bin/sh
+# initramfs-tools local-top hook for Razer Phone 2 Linux.
+#
+# This script runs before local_device_setup(). initramfs-tools sources
+# /conf/param.conf after local-top ORDER runs, so write ROOT there instead of
+# assigning a shell variable that would be lost when this script exits.
+
+PREREQ=""
+
+prereqs()
+{
+    echo "$PREREQ"
+}
+
+case "${1:-}" in
+    prereqs)
+        prereqs
+        exit 0
+        ;;
+esac
+
+if [ -r /conf/conf.d/razer-root ]; then
+    # shellcheck disable=SC1091
+    . /conf/conf.d/razer-root
+fi
+
+: "${RAZER_ROOT:=/dev/disk/by-partlabel/userdata}"
+
+case "${ROOT:-}" in
+    ""|/dev/dm-*|/dev/mapper/*)
+        echo "razer-root: using ${RAZER_ROOT} instead of Android boot root ${ROOT:-<empty>}"
+        {
+            printf "ROOT='%s'\n" "${RAZER_ROOT}"
+            printf "BOOT='local'\n"
+        } >> /conf/param.conf
+        ;;
+    *)
+        echo "razer-root: keeping cmdline root ${ROOT}"
+        ;;
+esac

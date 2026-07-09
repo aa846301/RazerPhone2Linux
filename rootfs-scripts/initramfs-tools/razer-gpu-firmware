@@ -1,0 +1,22 @@
+#!/bin/sh
+# initramfs-tools hook: bundle Adreno 630 firmware into the initrd.
+# DRM_MSM is builtin and the GPU probes (~2.5s) long before the rootfs is
+# mounted, so adreno_request_fw must find sqe/gmu/zap inside the initramfs
+# or GPU init fails with "failed to load a630_sqe.fw" and never retries.
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "$1" in
+prereqs) prereqs; exit 0 ;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+for f in /usr/lib/firmware/qcom/a630_sqe.fw \
+         /usr/lib/firmware/qcom/a630_gmu.bin \
+         /usr/lib/firmware/qcom/sdm845/Razer/aura/a630_zap.mdt \
+         /usr/lib/firmware/qcom/sdm845/Razer/aura/a630_zap.b00 \
+         /usr/lib/firmware/qcom/sdm845/Razer/aura/a630_zap.b01 \
+         /usr/lib/firmware/qcom/sdm845/Razer/aura/a630_zap.b02; do
+    [ -f "$f" ] && copy_file firmware "$f"
+done
+exit 0

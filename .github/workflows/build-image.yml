@@ -1,0 +1,89 @@
+name: Build flashable image
+
+# Full reproduction of the Razer Phone 2 mainline Linux image from a clean
+# checkout. Source/configuration lives in this repository:
+#   - kernel source pin:      config/kernel-source.env
+#   - kernel patches:         kernel-patches/*.patch
+#   - DTS + panel driver:     dts/, panel-driver/
+#   - rootfs inputs:          rootfs-scripts/, rootfs-packages/, rootfs-binaries/
+# Proprietary Razer firmware is imported at runtime from RAZER_FACTORY_ZIP_URL.
+# The pipeline is the same four scripts used for local development; the CI
+# entrypoint (scripts/ci-build.sh) only adds architecture assertions and
+# checksumming. Reading this file top-to-bottom is sufficient to reproduce
+# the project on any Ubuntu 24.04 machine.
+
+on:
+  workflow_dispatch:
+    inputs:
+      userspace_profile:
+        description: Optional app stack
+        type: choice
+        options:
+          - none
+          - ha
+          - 3dprinter
+        default: none
+  push:
+    branches: [master]
+    tags:
+      - 'v*'
+    paths-ignore:
+      - '**.md'
+      - 'doc/**'
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      RAZER_FACTORY_ZIP_URL: ${{ secrets.RAZER_FACTORY_ZIP_URL }}
+      RAZER_USERSPACE_PROFILE: ${{ github.event.inputs.userspace_profile || '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free runner disk space
+        # Kernel checkout + build tree + 4GB rootfs image + debootstrap
+        # chroot need ~15GB; drop the preinstalled toolchains we never use.
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/.ghcup /usr/local/share/boost
+          df -h /
+
+      - name: Cache pinned kernel checkout
+        uses: actions/cache@v4
+        with:
+          path: ~/razorphone2linux/kernel/linux
+          key: kernel-${{ hashFiles('config/kernel-source.env') }}
+
+      - name: Build (setup -> kernel -> rootfs -> boot image)
+        run: bash scripts/ci-build.sh
+
+      - name: Upload boot image + metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-image
+          if-no-files-found: error
+          path: |
+            output/base/boot.img
+            output/base/Image.gz-dtb
+            output/base/kernel.config
+            output/base/kernel.release
+            output/base/userspace.profile
+            output/base/initrd.img
+            output/base/initrd.img-*
+            output/base/vbmeta_disabled.img
+            output/base/SHA256SUMS
+
+      - name: Upload rootfs (sparse fastboot image)
+        uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-sparse
+          if-no-files-found: error
+          compression-level: 6
+          path: output/base/rootfs-sparse.img

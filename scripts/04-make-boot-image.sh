@@ -19,10 +19,15 @@ set -euo pipefail
 WORKDIR="${RAZER_WORKDIR:-$HOME/razorphone2linux}"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$PROJECT_DIR/config/build.env"
-IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-printer}"
+IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-base}"
 case "$IMAGE_PROFILE" in
-    base|printer) ;;
-    *) echo "ERROR: RAZER_IMAGE_PROFILE must be base or printer."; exit 2 ;;
+    base) ;;
+    *) echo "ERROR: RAZER_IMAGE_PROFILE must be base."; exit 2 ;;
+esac
+USERSPACE_PROFILE="${RAZER_USERSPACE_PROFILE:-none}"
+case "$USERSPACE_PROFILE" in
+    none|ha|3dprinter) ;;
+    *) echo "ERROR: RAZER_USERSPACE_PROFILE must be none, ha, or 3dprinter."; exit 2 ;;
 esac
 OUTPUT_DIR="$WORKDIR/output/$IMAGE_PROFILE"
 BOOT_IMG="$OUTPUT_DIR/boot.img"
@@ -30,15 +35,18 @@ WIN_OUTPUT_DIR="$PROJECT_DIR/output/$IMAGE_PROFILE"
 LOCAL_MKBOOTIMG="$WORKDIR/mkbootimg-tool/mkbootimg.py"
 KERNEL_RELEASE_FILE="$OUTPUT_DIR/kernel.release"
 ROOTFS_RELEASE_FILE="$OUTPUT_DIR/rootfs.kernel-release"
+ROOTFS_USERSPACE_FILE="$OUTPUT_DIR/userspace.profile"
 KERNEL_FLAVOR_FILE="$OUTPUT_DIR/kernel.flavor"
-DISPLAY_MODE="${RAZER_BOOT_DISPLAY_MODE:-helix}"
+DISPLAY_MODE="${RAZER_BOOT_DISPLAY_MODE:-normal}"
 
 mkdir -p "$OUTPUT_DIR" "$WIN_OUTPUT_DIR"
 
+# "helix" was the historical name of the normal mode (HelixScreen era).
+[ "$DISPLAY_MODE" = "helix" ] && DISPLAY_MODE=normal
 case "$DISPLAY_MODE" in
-    helix|console) ;;
+    normal|console) ;;
     *)
-        echo "ERROR: RAZER_BOOT_DISPLAY_MODE must be 'helix' or 'console'."
+        echo "ERROR: RAZER_BOOT_DISPLAY_MODE must be 'normal' or 'console'."
         exit 2
         ;;
 esac
@@ -48,6 +56,7 @@ echo " Razer Phone 2 - Boot Image Creator"
 echo "========================================"
 echo "Display mode: $DISPLAY_MODE"
 echo "Image profile: $IMAGE_PROFILE"
+echo "Userspace profile: $USERSPACE_PROFILE"
 
 if [ -f "$LOCAL_MKBOOTIMG" ]; then
     MKBOOTIMG_CMD=(python3 "$LOCAL_MKBOOTIMG")
@@ -94,9 +103,25 @@ fi
 
 ROOTFS_RELEASE=$(tr -d '\r\n' < "$ROOTFS_RELEASE_FILE")
 if [ "$ROOTFS_RELEASE" != "$KERNEL_RELEASE" ]; then
-    echo "ERROR: rootfs modules were built for '$ROOTFS_RELEASE' but boot kernel is '$KERNEL_RELEASE'."
-    echo "Rebuild in order: 02-build-kernel.sh -> 03-build-rootfs.sh -> 04-make-boot-image.sh"
-    exit 1
+    if [ "${RAZER_ALLOW_KERNEL_MISMATCH:-0}" = "1" ]; then
+        # Legitimate for dual-kernel rootfs images (both module trees are
+        # kept on disk so an older kernel remains a boot-only rollback).
+        echo "WARNING: rootfs last refreshed for '$ROOTFS_RELEASE', boot kernel is '$KERNEL_RELEASE' (override active)."
+    else
+        echo "ERROR: rootfs modules were built for '$ROOTFS_RELEASE' but boot kernel is '$KERNEL_RELEASE'."
+        echo "Rebuild in order: 02-build-kernel.sh -> 03-build-rootfs.sh -> 04-make-boot-image.sh"
+        echo "Set RAZER_ALLOW_KERNEL_MISMATCH=1 only for dual-kernel rootfs images."
+        exit 1
+    fi
+fi
+
+if [ -f "$ROOTFS_USERSPACE_FILE" ]; then
+    ROOTFS_USERSPACE=$(tr -d '\r\n' < "$ROOTFS_USERSPACE_FILE")
+    if [ "$ROOTFS_USERSPACE" != "$USERSPACE_PROFILE" ]; then
+        echo "ERROR: rootfs userspace profile is '$ROOTFS_USERSPACE' but boot packaging requested '$USERSPACE_PROFILE'."
+        echo "Rebuild or refresh rootfs with matching RAZER_USERSPACE_PROFILE."
+        exit 1
+    fi
 fi
 
 # -------------------------------------------------------
@@ -108,80 +133,47 @@ cat "$OUTPUT_DIR/Image.gz" "$OUTPUT_DIR/sdm845-razer-aura.dtb" \
 echo "  Created Image.gz-dtb ($(du -h "$OUTPUT_DIR/Image.gz-dtb" | cut -f1))"
 
 # -------------------------------------------------------
-# Step 2: Build custom busybox initramfs (bypasses klibc run-init bug)
+# Step 2: Use Ubuntu initramfs-tools initrd from the rootfs
 # -------------------------------------------------------
-echo "[2/4] Building custom initramfs..."
+echo "[2/4] Validating Ubuntu initramfs-tools initrd..."
 
-INIT_SCRIPT="$PROJECT_DIR/initramfs/init-boot.sh"
-BUSYBOX_BIN="$OUTPUT_DIR/busybox-aarch64"
-RAMDISK="$OUTPUT_DIR/initramfs-boot.cpio.gz"
+INITRD_VERSIONED="$OUTPUT_DIR/initrd.img-$KERNEL_RELEASE"
+RAMDISK="$OUTPUT_DIR/initrd.img"
 
-if [ ! -f "$INIT_SCRIPT" ]; then
-    echo "ERROR: $INIT_SCRIPT not found"
+if [ ! -f "$INITRD_VERSIONED" ]; then
+    echo "ERROR: expected initramfs-tools initrd missing:"
+    echo "  $INITRD_VERSIONED"
+    echo "Run scripts/03-refresh-rootfs.sh after scripts/02-build-kernel.sh."
     exit 1
 fi
 
-# Find ARM64 busybox binary
-if [ ! -f "$BUSYBOX_BIN" ] || ! file "$BUSYBOX_BIN" | grep -q 'ARM aarch64'; then
-    BUSYBOX_BIN="$OUTPUT_DIR/debug/busybox-aarch64"
-fi
-if [ ! -f "$BUSYBOX_BIN" ] || ! file "$BUSYBOX_BIN" | grep -q 'ARM aarch64'; then
-    echo "ERROR: ARM64 busybox not found at output/busybox-aarch64"
+cp -f "$INITRD_VERSIONED" "$RAMDISK"
+
+if [ ! -s "$RAMDISK" ]; then
+    echo "ERROR: initrd is empty: $RAMDISK"
     exit 1
 fi
-echo "  busybox: $BUSYBOX_BIN"
 
-# UFS PHY module (only needed when PHY_QCOM_QMP_UFS=m). Pick the raw build
-# tree that produced this boot image so contrast kernels do not inherit stale
-# modules from the normal mainline tree.
-KERNEL_FLAVOR=""
-if [ -f "$KERNEL_FLAVOR_FILE" ]; then
-    KERNEL_FLAVOR=$(tr -d '\r\n' < "$KERNEL_FLAVOR_FILE")
-fi
-case "$KERNEL_FLAVOR" in
-    pmos-sdm845-contrast)
-        UFS_PHY_KO="$WORKDIR/kernel/pmos-sdm845/drivers/phy/qualcomm/phy-qcom-qmp-ufs.ko"
-        ;;
-    *)
-        UFS_PHY_KO="$WORKDIR/kernel/linux/drivers/phy/qualcomm/phy-qcom-qmp-ufs.ko"
-        ;;
-esac
-if [ -f "$UFS_PHY_KO" ]; then
-    echo "  UFS PHY module: $UFS_PHY_KO ($(du -h "$UFS_PHY_KO" | cut -f1))"
+if command -v lsinitramfs >/dev/null 2>&1; then
+    INITRD_LIST="$OUTPUT_DIR/initrd-files.txt"
+    lsinitramfs "$RAMDISK" > "$INITRD_LIST"
+    grep -qx 'init' "$INITRD_LIST" || {
+        echo "ERROR: initrd does not contain /init."
+        exit 1
+    }
+    if grep -q 'initramfs/init-boot.sh' "$INITRD_LIST"; then
+        echo "ERROR: normal boot initrd unexpectedly contains the legacy custom initramfs."
+        exit 1
+    fi
+    if ! grep -Eq '(^usr/lib/udev/|^lib/systemd/systemd-udevd$|^usr/lib/systemd/systemd-udevd$|^sbin/udevd$)' "$INITRD_LIST"; then
+        echo "ERROR: initrd does not appear to contain udev; by-partlabel root discovery may fail."
+        exit 1
+    fi
 else
-    echo "  UFS PHY module not present; assuming it is built into the kernel."
+    echo "WARNING: lsinitramfs not available; initrd content validation skipped."
 fi
 
-INITRD_DIR=$(mktemp -d)
-mkdir -p "$INITRD_DIR"/{bin,dev,run,proc,sys,sysroot}
-mkdir -p "$INITRD_DIR/sys/kernel/config"
-mkdir -p "$INITRD_DIR/dev/pts"
-mkdir -p "$INITRD_DIR/lib/modules"
-
-# Install busybox and applet symlinks
-cp "$BUSYBOX_BIN" "$INITRD_DIR/bin/busybox"
-chmod +x "$INITRD_DIR/bin/busybox"
-for cmd in sh ash cat echo ls mkdir mknod mount umount sleep ln \
-           find grep sed switch_root mdev blkid insmod; do
-    ln -sf busybox "$INITRD_DIR/bin/$cmd"
-done
-ln -sf ../bin "$INITRD_DIR/sbin"
-
-# Install UFS PHY module into initramfs when it is modular.
-if [ -f "$UFS_PHY_KO" ]; then
-    cp "$UFS_PHY_KO" "$INITRD_DIR/lib/modules/phy-qcom-qmp-ufs.ko"
-fi
-
-# Install init script
-cp "$INIT_SCRIPT" "$INITRD_DIR/init"
-chmod +x "$INITRD_DIR/init"
-
-# Create /dev/console node (needed before devtmpfs mount)
-mknod "$INITRD_DIR/dev/console" c 5 1 2>/dev/null || true
-
-(cd "$INITRD_DIR" && find . | cpio -o -H newc 2>/dev/null | gzip -9) > "$RAMDISK"
-rm -rf "$INITRD_DIR"
-echo "  Created initramfs-boot.cpio.gz ($(du -h "$RAMDISK" | cut -f1))"
+echo "  Using initrd: $RAMDISK ($(du -h "$RAMDISK" | cut -f1))"
 
 # -------------------------------------------------------
 # Step 3: Create boot.img
@@ -189,15 +181,36 @@ echo "  Created initramfs-boot.cpio.gz ($(du -h "$RAMDISK" | cut -f1))"
 echo "[3/4] Creating boot.img..."
 
 # Kernel command line for mainline Linux on Razer Phone 2.
-# Keep ttyMSM0 as the only early console. ttyGS0 is an optional USB gadget
-# endpoint and must never become a boot dependency on host carrier/DTR.
-CMDLINE_COMMON="earlycon=msm_geni_serial,0xA84000 console=ttyMSM0,115200n8 clk_ignore_unused pd_ignore_unused fw_devlink=permissive root=/dev/disk/by-partlabel/userdata rootfstype=ext4 rootwait rw loglevel=7 pcie_aspm=off panic=30 init=/usr/lib/systemd/systemd"
+# Root selection is handled inside initramfs-tools via
+# /etc/initramfs-tools/conf.d/razer-root and
+# /etc/initramfs-tools/scripts/local-top/razer-root. This avoids fighting
+# Android bootloaders that append their stock root=/dev/dm-* argument.
+# The initramfs root value must be a bootloader-compatible /dev path such as
+# /dev/disk/by-partlabel/userdata; do not pass PARTLABEL=userdata to the
+# kernel's early VFS root parser.
+# Keep the final ttyMSM0 console for the SDM845 display race workaround.
+# module_blacklist=ipa: kernel-level guard — loading IPA on this rootfs
+# hard-resets the SoC ~30s later even with a healthy modem stack
+# (2026-07-03). WiFi works fully without it; see razer-wifi-ready.sh.
+CMDLINE_COMMON="earlycon=msm_geni_serial,0xA84000 console=ttyMSM0,115200n8 clk_ignore_unused pd_ignore_unused fw_devlink=permissive rootfstype=ext4 rw loglevel=7 pcie_aspm=off module_blacklist=ipa init=/usr/lib/systemd/systemd"
 case "$DISPLAY_MODE" in
-    helix)
-        CMDLINE="$CMDLINE_COMMON fbcon=map:99 vt.global_cursor_default=0 console=ttyMSM0,115200n8"
+    normal)
+        # Normal boot (UI endgame: Home Assistant dashboard).
+        # Boot-log policy: kernel + initramfs messages stay visible on the
+        # panel (console=tty0 last, loglevel=6, no quiet). Once rootfs is up,
+        # razer-quiet-console.service (gated on razer_quiet_console below)
+        # drops the console loglevel so the screen goes quiet; systemd status
+        # lines are suppressed throughout since rootfs output is not needed.
+        CMDLINE="$CMDLINE_COMMON vt.global_cursor_default=0 razer_fb_clear=0 console=tty0 loglevel=6 systemd.show_status=false rd.systemd.show_status=false razer_quiet_console"
+        if [ "$USERSPACE_PROFILE" = "none" ]; then
+            CMDLINE="$CMDLINE razer_panel_idle_blank"
+        fi
         ;;
     console)
-        CMDLINE="$CMDLINE_COMMON console=tty0 vt.global_cursor_default=1 razer_fb_clear=0 console=ttyMSM0,115200n8"
+        # Screen-debug boots must keep tty0 last so initramfs-tools and
+        # systemd status messages are visible on the phone panel instead of
+        # disappearing into the UART console.
+        CMDLINE="$CMDLINE_COMMON vt.global_cursor_default=1 razer_fb_clear=0 console=tty0"
         ;;
 esac
 
@@ -210,7 +223,7 @@ fi
     --ramdisk "$RAMDISK" \
     --base 0x00000000 \
     --kernel_offset 0x00008000 \
-    --ramdisk_offset 0x01000000 \
+    --ramdisk_offset 0x02000000 \
     --tags_offset 0x00000100 \
     --pagesize 4096 \
     --header_version 1 \
@@ -264,8 +277,12 @@ print('  Created vbmeta_disabled.img')
 mkdir -p "$WIN_OUTPUT_DIR"
 cp -f "$BOOT_IMG" "$WIN_OUTPUT_DIR/boot.img"
 cp -f "$RAMDISK" "$WIN_OUTPUT_DIR/$(basename "$RAMDISK")"
+cp -f "$INITRD_VERSIONED" "$WIN_OUTPUT_DIR/$(basename "$INITRD_VERSIONED")"
 cp -f "$KERNEL_RELEASE_FILE" "$WIN_OUTPUT_DIR/kernel.release"
 cp -f "$ROOTFS_RELEASE_FILE" "$WIN_OUTPUT_DIR/rootfs.kernel-release"
+if [ -f "$ROOTFS_USERSPACE_FILE" ]; then
+    cp -f "$ROOTFS_USERSPACE_FILE" "$WIN_OUTPUT_DIR/userspace.profile"
+fi
 if [ -f "$OUTPUT_DIR/vbmeta_disabled.img" ]; then
     cp -f "$OUTPUT_DIR/vbmeta_disabled.img" "$WIN_OUTPUT_DIR/vbmeta_disabled.img"
 fi
@@ -278,7 +295,7 @@ echo ""
 echo "Output files:"
 echo "  $BOOT_IMG"
 echo "  $OUTPUT_DIR/rootfs-sparse.img"
-echo "  $OUTPUT_DIR/vbmeta_disabled.img"
+echo "  $OUTPUT_DIR/vbmeta_disabled.img (one-time AVB setup helper; do not reflash if already installed)"
 echo ""
 echo "========================================"
 echo " FLASHING INSTRUCTIONS"
@@ -299,11 +316,11 @@ echo ""
 echo "5. Flash boot image to both slots and flash rootfs"
 echo '   fastboot flash boot_a output\boot.img && fastboot flash boot_b output\boot.img && fastboot flash userdata output\rootfs-sparse.img && fastboot reboot'
 echo ""
-echo "6. Disable verified boot (allows unsigned images, when required)"
-echo "   fastboot --disable-verity --disable-verification flash vbmeta $OUTPUT_DIR/vbmeta_disabled.img"
+echo "6. Disable verified boot only once, if this device has not already had disabled vbmeta flashed."
+echo "   This is intentionally not part of the routine flash command."
 echo ""
 echo "7. First boot will be slow (resizing filesystem)."
-echo "   Connect via USB serial (ttyGS0) or WiFi SSH for access."
+echo "   Normal boot uses Ubuntu initramfs-tools. Use WiFi SSH after NetworkManager comes up."
 echo ""
 echo "Default credentials:  klipper / klipper"
 echo "Change immediately after first boot!"

@@ -1,0 +1,140 @@
+From: Razer Phone 2 Linux Port <razerphone2linux@example.invalid>
+Subject: [PATCH] drm/msm: align DSC/DSI cmd-mode programming with Razer LK ground truth
+
+The Razer aura bootloader's continued-splash display pipeline (the only
+known-working driver of this panel outside Android) was captured via
+/dev/mem on a simpledrm boot and diffed register-by-register against the
+state programmed by the mainline native path. After excluding transient,
+interrupt, and mode-structural differences, the working configuration
+differs in exactly these host-side values, all applied here gated on
+this panel's DSC geometry (10bpc, 720x8 slices):
+
+ - DSC rc_range_params[0].range_max_qp: LK 8 vs pre-SCR table 4
+ - DSC flatness det thresh: LK 2 vs drm helper's 2<<(bpc-8)=8
+ - DSC initial_lines: LK 2 vs computed 3
+ - DSC regs 0x128/0x12c/0x130: LK-only writes past the documented block;
+   0x12c/0x130 carry the only per-instance-asymmetric values in the
+   whole working config (captured verbatim per DSC instance)
+ - DSI COMMAND_COMPRESSION_MODE_CTRL2 STREAM0_SLICE_WIDTH: LK 0 vs
+   slice_chunk_size, and CTRL written clean without read-modify
+ - DSI CMD_CFG0 INTERLEAVE_MAX: LK 1 vs 0
+
+Test patch for the DSI0 left-half stripe investigation; not
+upstream-shaped.
+
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dsc.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dsc.c
+index 3a149caa7ff4..6ade4d1abe1f 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dsc.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dsc.c
+@@ -53,12 +53,23 @@ static void dpu_hw_dsc_config(struct dpu_hw_dsc *hw_dsc,
+ 	u32 det_thresh_flatness;
+ 	bool is_cmd_mode = !(mode & DSC_MODE_VIDEO);
+ 	bool input_10_bits = dsc->bits_per_component == 10;
++	/*
++	 * Razer aura NT36830: match the bootloader's working DSC encoder
++	 * programming exactly (captured via /dev/mem on a continued-splash
++	 * boot); see the gated overrides below.
++	 */
++	bool razer_lk_align = dsc->bits_per_component == 10 &&
++			      dsc->slice_width == 720 && dsc->slice_height == 8;
+ 
+ 	DPU_REG_WRITE(c, DSC_COMMON_MODE, mode);
+ 
+ 	if (is_cmd_mode)
+ 		initial_lines += 1;
+ 
++	/* LK programs initial_lines = 2 (incl. the cmd-mode +1). */
++	if (razer_lk_align)
++		initial_lines = 2;
++
+ 	slice_last_group_size = (dsc->slice_width + 2) % 3;
+ 
+ 	data = (initial_lines << 20);
+@@ -109,6 +120,9 @@ static void dpu_hw_dsc_config(struct dpu_hw_dsc *hw_dsc,
+ 	DPU_REG_WRITE(c, DSC_DSC_OFFSET, data);
+ 
+ 	det_thresh_flatness = drm_dsc_flatness_det_thresh(dsc);
++	/* LK uses flatness det thresh 2 (8bpc-style) even at 10bpc. */
++	if (razer_lk_align)
++		det_thresh_flatness = 2;
+ 	data = det_thresh_flatness << 10;
+ 	data |= dsc->flatness_max_qp << 5;
+ 	data |= dsc->flatness_min_qp;
+@@ -123,6 +137,24 @@ static void dpu_hw_dsc_config(struct dpu_hw_dsc *hw_dsc,
+ 	data |= dsc->rc_quant_incr_limit0 << 4;
+ 	data |= dsc->rc_edge_factor;
+ 	DPU_REG_WRITE(c, DSC_RC, data);
++
++	/*
++	 * LK-only registers past the documented block (0x128/0x12c/0x130):
++	 * not written by mainline or the downstream kernel (bootloader-only
++	 * programming), values captured from the working continued-splash
++	 * state. 0x12c/0x130 are the only per-instance-asymmetric DSC config
++	 * in the entire working setup.
++	 */
++	if (razer_lk_align) {
++		DPU_REG_WRITE(c, 0x128, 0x13);
++		if (hw_dsc->idx == DSC_0) {
++			DPU_REG_WRITE(c, 0x12c, 0x004e0006);
++			DPU_REG_WRITE(c, 0x130, 0x004c0004);
++		} else if (hw_dsc->idx == DSC_1) {
++			DPU_REG_WRITE(c, 0x12c, 0x00570002);
++			DPU_REG_WRITE(c, 0x130, 0x00550000);
++		}
++	}
+ }
+ 
+ static void dpu_hw_dsc_config_thresh(struct dpu_hw_dsc *hw_dsc,
+diff --git a/drivers/gpu/drm/msm/dsi/dsi_host.c b/drivers/gpu/drm/msm/dsi/dsi_host.c
+index 6bc886b0abcb..98b844d9002a 100644
+--- a/drivers/gpu/drm/msm/dsi/dsi_host.c
++++ b/drivers/gpu/drm/msm/dsi/dsi_host.c
+@@ -844,6 +844,8 @@ static void dsi_ctrl_enable(struct msm_dsi_host *msm_host,
+ 		/* Do not swap RGB colors */
+ 		data = DSI_CMD_CFG0_RGB_SWAP(SWAP_RGB);
+ 		data |= DSI_CMD_CFG0_DST_FORMAT(dsi_get_cmd_fmt(mipi_fmt));
++		/* Razer aura LK ground truth: INTERLEAVE_MAX = 1 */
++		data |= DSI_CMD_CFG0_INTERLEAVE_MAX(1);
+ 		dsi_write(msm_host, REG_DSI_CMD_CFG0, data);
+ 
+ 		data = DSI_CMD_CFG1_WR_MEM_START(MIPI_DCS_WRITE_MEMORY_START) |
+@@ -974,14 +976,16 @@ static void dsi_update_dsc_timing(struct msm_dsi_host *msm_host, bool is_cmd_mod
+ 	reg |= DSI_VIDEO_COMPRESSION_MODE_CTRL_EN;
+ 
+ 	if (is_cmd_mode) {
+-		reg_ctrl = dsi_read(msm_host, REG_DSI_COMMAND_COMPRESSION_MODE_CTRL);
++		/*
++		 * Razer aura LK ground truth: the bootloader's working config
++		 * writes CTRL = stream0 fields only (no stray stream1
++		 * datatype bits survive a read-modify of the LK-era value)
++		 * and leaves CTRL2 STREAM0_SLICE_WIDTH at 0 instead of
++		 * slice_chunk_size.
++		 */
++		reg_ctrl = reg;
+ 		reg_ctrl2 = dsi_read(msm_host, REG_DSI_COMMAND_COMPRESSION_MODE_CTRL2);
+-
+-		reg_ctrl &= ~0xffff;
+-		reg_ctrl |= reg;
+-
+ 		reg_ctrl2 &= ~DSI_COMMAND_COMPRESSION_MODE_CTRL2_STREAM0_SLICE_WIDTH__MASK;
+-		reg_ctrl2 |= DSI_COMMAND_COMPRESSION_MODE_CTRL2_STREAM0_SLICE_WIDTH(dsc->slice_chunk_size);
+ 
+ 		dsi_write(msm_host, REG_DSI_COMMAND_COMPRESSION_MODE_CTRL, reg_ctrl);
+ 		dsi_write(msm_host, REG_DSI_COMMAND_COMPRESSION_MODE_CTRL2, reg_ctrl2);
+@@ -1912,6 +1916,16 @@ static int dsi_populate_dsc_params(struct msm_dsi_host *msm_host, struct drm_dsc
+ 		return ret;
+ 	}
+ 
++	/*
++	 * Razer aura NT36830 (10bpc, 720x8 slices): the bootloader's working
++	 * DSC encoder programming (captured via /dev/mem on a continued-splash
++	 * boot) uses range_max_qp[0] = 8 where the pre-SCR table has 4; every
++	 * other rc-range entry matches. Align with the LK/DDIC ground truth.
++	 */
++	if (dsc->bits_per_component == 10 && dsc->slice_width == 720 &&
++	    dsc->slice_height == 8)
++		dsc->rc_range_params[0].range_max_qp = 8;
++
+ 	dsc->initial_scale_value = drm_dsc_initial_scale_value(dsc);
+ 	dsc->line_buf_depth = dsc->bits_per_component + 1;
+ 

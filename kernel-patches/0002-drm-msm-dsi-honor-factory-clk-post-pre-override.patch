@@ -1,0 +1,116 @@
+From: Razer Phone 2 Linux Port <razerphone2linux@example.invalid>
+Subject: [PATCH] drm/msm/dsi: honor factory qcom,mdss-dsi-t-clk-post/-pre override
+
+The Razer aura NT36830 factory panel DTS hand-tunes
+qcom,mdss-dsi-t-clk-post/-pre (0x0b / 0x21) for this exact panel+board
+instead of relying on the SoC-generic computed defaults in
+msm_dsi_dphy_timing_calc_v3(). Mainline's 10nm DSI PHY driver has no DT
+plumbing to honor those two downstream properties at all -- it always
+uses the computed value. Add optional parsing so a board can override
+clk_post/clk_pre with the factory-calibrated values when present;
+absent on stock panels this is a no-op (computed value is kept).
+
+The factory values are the raw 6-bit register fields, so overriding
+clk_pre also clears clk_pre_inc_by_2 (otherwise a computed
+T_CLK_PRE_EXTEND could stack +2/byteclk on top of the raw value), and
+both parsed values are rejected if they exceed the 6-bit field.
+
+Internal test patch: the properties live on the PHY node here for
+diagnosis convenience; the factory puts them on the panel node, so this
+is not upstream-shaped. Includes an unconditional dev_info() diagnostic
+line reporting the final post-override clk_post/clk_pre (and extension
+state) per PHY instance -- remove once the DSI0 stripe investigation
+concludes.
+
+diff --git a/drivers/gpu/drm/msm/dsi/phy/dsi_phy_10nm.c b/drivers/gpu/drm/msm/dsi/phy/dsi_phy_10nm.c
+--- a/drivers/gpu/drm/msm/dsi/phy/dsi_phy_10nm.c
++++ b/drivers/gpu/drm/msm/dsi/phy/dsi_phy_10nm.c
+@@ -94,6 +94,10 @@ struct dsi_phy_10nm_tuning_cfg {
+ 	u8 rescode_offset_top[DSI_LANE_MAX];
+ 	u8 rescode_offset_bot[DSI_LANE_MAX];
+ 	u8 vreg_ctrl;
++	bool clk_post_override;
++	u8 clk_post;
++	bool clk_pre_override;
++	u8 clk_pre;
+ };
+
+ /*
+@@ -807,6 +811,31 @@ static int dsi_10nm_phy_enable(struct msm_dsi_phy *phy,
+ 		return -EINVAL;
+ 	}
+
++	/*
++	 * Razer aura: the factory panel DTS hand-tunes
++	 * qcom,mdss-dsi-t-clk-post/-pre for this exact panel+board instead
++	 * of using the SoC-generic computed defaults above. Mainline has
++	 * no stock plumbing to honor those two properties at all -- apply
++	 * them here if present, otherwise keep the computed value.
++	 */
++	if (tuning_cfg->clk_post_override)
++		timing->shared_timings.clk_post = tuning_cfg->clk_post;
++	if (tuning_cfg->clk_pre_override) {
++		timing->shared_timings.clk_pre = tuning_cfg->clk_pre;
++		/*
++		 * The factory value is the raw 6-bit register field; do not
++		 * let a computed inc-by-2 extension from calc_v3 stack on
++		 * top of it (T_CLK_PRE_EXTEND would add +2/byteclk).
++		 */
++		timing->shared_timings.clk_pre_inc_by_2 = false;
++	}
++
++	dev_info(&phy->pdev->dev,
++		"razer-clkpostpre: phy_id=%d override_post=%d override_pre=%d final_post=%u final_pre=%u pre_inc_by_2=%d\n",
++		phy->id, tuning_cfg->clk_post_override, tuning_cfg->clk_pre_override,
++		timing->shared_timings.clk_post, timing->shared_timings.clk_pre,
++		timing->shared_timings.clk_pre_inc_by_2);
++
+ 	if (dsi_phy_hw_v3_0_is_pll_on(phy))
+ 		pr_warn("PLL turned on before configuring PHY\n");
+
+@@ -915,6 +944,7 @@ static int dsi_10nm_phy_parse_dt(struct msm_dsi_phy *phy)
+ 	s8 offset_top[DSI_LANE_MAX] = { 0 }; /* No offset */
+ 	s8 offset_bot[DSI_LANE_MAX] = { 0 }; /* No offset */
+ 	u32 ldo_level = 400; /* 400mV */
++	u32 val32;
+ 	u8 level;
+ 	int ret, i;
+
+@@ -989,6 +1019,37 @@ static int dsi_10nm_phy_parse_dt(struct msm_dsi_phy *phy)
+ 	}
+ 	tuning_cfg->vreg_ctrl = 0x58 | (0x7 & level);
+
++	/*
++	 * Optional: factory-tuned clk_post/clk_pre override (see
++	 * dsi_10nm_phy_enable()). Both properties are optional and
++	 * independent; absent on stock mainline panels.
++	 */
++	ret = of_property_read_u32(dev->of_node, "qcom,mdss-dsi-t-clk-post", &val32);
++	if (!ret) {
++		if (val32 > 0x3f) {
++			DRM_DEV_ERROR(dev, "qcom,mdss-dsi-t-clk-post %u exceeds 6-bit field\n", val32);
++			return -EINVAL;
++		}
++		tuning_cfg->clk_post_override = true;
++		tuning_cfg->clk_post = val32;
++	} else if (ret != -EINVAL) {
++		DRM_DEV_ERROR(dev, "failed to parse qcom,mdss-dsi-t-clk-post, %d\n", ret);
++		return ret;
++	}
++
++	ret = of_property_read_u32(dev->of_node, "qcom,mdss-dsi-t-clk-pre", &val32);
++	if (!ret) {
++		if (val32 > 0x3f) {
++			DRM_DEV_ERROR(dev, "qcom,mdss-dsi-t-clk-pre %u exceeds 6-bit field\n", val32);
++			return -EINVAL;
++		}
++		tuning_cfg->clk_pre_override = true;
++		tuning_cfg->clk_pre = val32;
++	} else if (ret != -EINVAL) {
++		DRM_DEV_ERROR(dev, "failed to parse qcom,mdss-dsi-t-clk-pre, %d\n", ret);
++		return ret;
++	}
++
+ 	phy->tuning_cfg = tuning_cfg;
+
+ 	return 0;

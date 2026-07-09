@@ -2,56 +2,54 @@
 
 [繁體中文](README.zh-TW.md)
 
-Mainline Linux bring-up for the Razer Phone 2 (`aura`, Qualcomm SDM845), built
-from Windows 11 through WSL Ubuntu 24.04.
+Mainline Linux for the Razer Phone 2 (`aura`, Qualcomm SDM845). The default
+release image is an app-free hardware platform: GPU-capable, WiFi-capable,
+charge-limited, and ready for users to install their own software.
 
-## Current status
+## Current Status
 
 - Kernel baseline: SDM845 mainline `sdm845/7.1-dev`, pinned at
   `85f1df2a4ec7` (`7.1.0-rc1`).
-- Kernel configuration follows the SDM845 tree's tested order:
-  `defconfig`, `sdm845.config`, `misc.config`, then the Razer/profile
-  fragments.
-- Complete kernel releases build cleanly as `7.1.0-rc1-sdm845` and
-  `7.1.0-rc1-sdm845-printer`.
-- The 7.1 boot enables the PMI8998 SMB2 charger, fuel gauge, and RRADC as
-  built-in drivers. The DTS uses the factory 4.4 V / 4000 mAh battery profile
-  with a conservative 2 A mainline charge limit. The image is offline
-  validated; physical charging validation is still pending.
+- Native NT36830 dual-DSI/DSC display is implemented through the opt-in
+  native-panel build path. The DSI/DSC configuration is aligned with Razer LK
+  factory behavior.
+- Adreno 630 hardware GL works through freedreno when the stock Razer
+  `a630_zap.*` firmware and linux-firmware `a630_sqe.fw` are present.
+- PMI8998 SMB2 charger, fuel gauge, and RRADC are enabled. The rootfs applies
+  40%/80% charge thresholds when the kernel exposes writable power-supply
+  controls, while the DTS keeps a conservative 2 A charge limit.
+- The base image blanks the panel after boot on normal images, and keeps a
+  console mode available for display debugging.
 - USB NCM networking and SSH work at `192.168.137.133`.
-- Boot does not depend on a USB host: early logs stay on `ttyMSM0`, while
-  `ttyGS0` remains an optional gadget serial login after userspace starts.
-- Touch, Klipper, Moonraker, and HelixScreen work on the preserved 6.16
-  recovery baseline.
-- A native NT36830 dual-DSI/DSC DRM driver is now implemented and linked into
-  the 7.1 build as a module. It exposes 60/120 Hz modes and passes its DT
-  binding check. The first 7.1 test keeps MDSS/DSI disabled and uses the
-  bootloader framebuffer; native-panel validation is the next separate stage.
 - WiFi works through MSS/WLFW, `rmtfs`, userspace `pd-mapper`, patched
-  `tqftpserv` v1.2, Razer FIH NV sharing, and the ath10k host-capability quirk.
-- HelixScreen waits for `wlan0` at boot, then exposes WiFi through
-  NetworkManager.
+  `tqftpserv`, Razer FIH NV sharing, and the ath10k host-capability quirk.
 
-The production kernel delta is kept in the board DTS, panel driver/binding,
-and the top-level files under `kernel-patches/`. Historical diagnostic code
-was removed from this branch and remains recoverable from the 6.16 baseline
-tag.
+Historical bring-up notes live in `doc/`. The validated WebKitGTK/Epiphany +
+sway Home Assistant kiosk prototype is archived under
+`rootfs-scripts/kiosk-prototype/`; it is installed only by the `ha` userspace
+profile, not by the default image.
 
-See [RECOVERY.md](RECOVERY.md) before display flashing. The exact known-working
-6.16 WiFi/Helix boot and rootfs images are stored outside the working tree.
+## Release Profiles
 
-## Prerequisites
+The hardware image profile is always `base`. Optional app stacks are selected
+with `RAZER_USERSPACE_PROFILE` or by release tag suffix:
 
-- Windows 11 with WSL2 and Ubuntu 24.04.
+- `v1.0.0` -> `none`: app-free platform image.
+- `v1.0.0-ha` -> `ha`: Home Assistant kiosk packages and prototype.
+- `v1.0.0-3dprinter` -> `3dprinter`: Klipper/Moonraker/HelixScreen stack.
+
+## Build
+
+Prerequisites:
+
+- Windows 11 with WSL2 Ubuntu 24.04.
 - At least 30 GB free space.
+- Android Platform Tools on Windows.
 - An unlocked Razer Phone 2 bootloader.
-- Android Platform Tools on Windows for flashing.
 - The Razer factory package `aura-p-release-3201-user-full.zip` or its
   `modem.img`. Proprietary firmware is not stored in Git.
 
-## Build from a clean clone
-
-In PowerShell:
+Set up the build environment:
 
 ```powershell
 git clone https://github.com/aa846301/razorphone2linux.git
@@ -59,147 +57,63 @@ cd razorphone2linux
 wsl bash -lc "cd /mnt/c/repo/razorphone2linux && bash scripts/01-setup-environment.sh"
 ```
 
-The setup command uses `sudo` only to install WSL build dependencies. It clones
-the pinned SDM845 kernel commit recorded in `config/kernel-source.env`.
-
-Copy the factory ZIP into the repository root, then extract firmware:
+Extract firmware:
 
 ```powershell
 wsl bash -lc "cd /mnt/c/repo/razorphone2linux && bash scripts/extract-modem-firmware.sh"
 ```
 
-Optionally preserve the phone's factory WiFi MAC instead of using a random MAC:
+Build the default app-free native-panel image:
 
 ```powershell
-Copy-Item config\device.env.example config\device.env
-# Edit RAZER_WLAN_MAC in config\device.env for this phone.
+powershell -ExecutionPolicy Bypass -File scripts\build-all-wsl.ps1 all -NativePanel
 ```
 
-The default download source is Canonical's global ARM64 endpoint
-`https://ports.ubuntu.com/ubuntu-ports`. Override it only when a closer mirror
-is known:
+Build an optional userspace profile locally:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-all-wsl.ps1 all `
-  -Profile printer `
-  -UbuntuMirror "https://ports.ubuntu.com/ubuntu-ports"
+powershell -ExecutionPolicy Bypass -File scripts\build-all-wsl.ps1 all -NativePanel -UserspaceProfile ha
+powershell -ExecutionPolicy Bypass -File scripts\build-all-wsl.ps1 all -NativePanel -UserspaceProfile 3dprinter
 ```
 
-Build the complete 3D-printer image:
+Artifacts are written to `output/base/`. The boot packager refuses to produce
+`boot.img` if the kernel and rootfs module releases do not match.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-all-wsl.ps1 all -Profile printer
-```
+## GitHub Actions
 
-Build a smaller general-purpose Linux image without
-Klipper/Moonraker/HelixScreen:
+The `Build flashable image` workflow builds the native-panel image and uploads
+`boot.img`, `rootfs-sparse.img`, `vbmeta_disabled.img`, initramfs, release
+markers, `userspace.profile`, and `SHA256SUMS`.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-all-wsl.ps1 all -Profile base
-```
-
-This wrapper runs the kernel and packaging phases as the normal WSL user and
-only the rootfs phase as WSL root, so a long build cannot stop halfway waiting
-for a sudo password.
-
-The final userspace is pinned in `config/userspace.env`:
-
-- Klipper `ca8230d505b7ba7fd225bfa6ed9655bc4520e805`
-- Moonraker `9008485843740c93e0154ccbdac1fc2b02b03aaa`
-- HelixScreen `v0.99.62`
-
-Artifacts are isolated by profile:
-
-- `output/printer/` for the complete Klipper host.
-- `output/base/` for the general-purpose image.
-
-The boot packager refuses to proceed if the kernel and rootfs module releases
-do not match.
-
-## Incremental development
-
-From Windows/Codex Desktop use:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts\build-all-wsl.ps1 validate -Profile printer
-```
-
-Use `validate-boot` for DTS or boot-command-line-only work. Use `all` whenever
-the package list, debootstrap configuration, or Klipper/Moonraker/Helix
-installation flow changes.
-
-The canonical implementation is limited to:
-
-- `scripts/02-build-kernel.sh`
-- `scripts/03-build-rootfs.sh`
-- `scripts/03-refresh-rootfs.sh`
-- `scripts/04-make-boot-image.sh`
-- `scripts/build-all.sh`
-- `scripts/build-all-wsl.ps1`
-
-Historical diagnostic scripts remain available from the recovery tag documented
-in `RECOVERY.md`; they are intentionally absent from the active build tree.
-
-For a driver/DT-only compile and link check without building every module:
-
-```bash
-RAZER_KERNEL_SCOPE=display RAZER_IMAGE_PROFILE=printer \
-  bash scripts/02-build-kernel.sh
-```
-
-This produces `display.kernel-release` and deliberately cannot be packaged
-with a rootfs. Use the normal full build for flashable artifacts.
+Set the repository secret `RAZER_FACTORY_ZIP_URL` to a private URL for
+`aura-p-release-3201-user-full.zip`. Tags choose userspace automatically:
+`v*`, `v*-ha`, and `v*-3dprinter`.
 
 ## Flash
 
-Warning: flashing userdata erases Android user data. First disable verified
-boot if required:
+Warning: flashing userdata erases Android user data. If disabled vbmeta has not
+already been flashed once:
 
 ```powershell
-fastboot --disable-verity --disable-verification flash vbmeta output\printer\vbmeta_disabled.img
+fastboot --disable-verity --disable-verification flash vbmeta output\base\vbmeta_disabled.img
 ```
 
-Flash both A/B boot slots and userdata in one operation:
+Routine flash:
 
 ```powershell
-fastboot flash boot_a output\printer\boot.img && fastboot flash boot_b output\printer\boot.img && fastboot flash userdata output\printer\rootfs-sparse.img && fastboot reboot
+fastboot flash boot_a output\base\boot.img && fastboot flash boot_b output\base\boot.img && fastboot flash userdata output\base\rootfs-sparse.img && fastboot reboot
 ```
 
 Default login is `klipper` / `klipper`. Change it after first boot.
 
-## WiFi and HelixScreen
-
-`razer-wifi-ready.service` starts after NetworkManager, `rmtfs`, and
-`tqftpserv`, waits up to 75 seconds for `wlan0`, and then allows HelixScreen to
-start. This avoids Helix caching “No WiFi hardware” when MSS/WLFW is still
-starting.
-
-HelixScreen is configured with `/display/rotate = 90` and
-`HELIX_DISPLAY_ROTATION=90`. Version `v0.99.62` calls the setting `rotate`,
-not `rotation`, and automatically rotates touch coordinates on fbdev.
-
-Useful checks:
+## Useful Checks
 
 ```bash
 nmcli device
 nmcli device wifi list
-systemctl status razer-wifi-ready helixscreen
-journalctl -b -u rmtfs -u tqftpserv -u razer-wifi-ready -u helixscreen
+systemctl status razer-charge-limits razer-panel-idle-blank razer-wifi-ready
+journalctl -b -u rmtfs -u tqftpserv -u razer-wifi-ready
 ```
 
-## Maintenance policy
-
-Project-specific DTS, config, rootfs, and packaging changes should be committed
-to this repository on feature branches and merged by pull request. The
-generated WSL kernel checkout is disposable; the build creates a local
-integration commit solely to produce a clean kernel release.
-
-Submit a separate upstream kernel PR only after a change is generalized,
-documented with a DT binding where needed, and useful beyond this repository.
-Do not upstream diagnostic logging. The `tqftpserv` Android-path behavior
-should eventually be proposed to its upstream project while this repository
-keeps a pinned, tested binary for reproducible images.
-
-See [FLASH-GUIDE.md](FLASH-GUIDE.md) for recovery and flashing notes.
-See [upstream/STATUS.md](upstream/STATUS.md) before preparing a Linux kernel
-mailing-list submission.
+See [FLASH-GUIDE.md](FLASH-GUIDE.md), [RECOVERY.md](RECOVERY.md), and
+[doc/ci-and-release.md](doc/ci-and-release.md) for operational details.

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>touchviz</title>
+<style>
+  html,body { margin:0; padding:0; background:#111; color:#eee;
+              font:16px monospace; height:100%; overflow:hidden; }
+  #legend { position:fixed; top:8px; left:8px; z-index:10; }
+  #log { position:fixed; bottom:8px; left:8px; right:8px; z-index:10;
+         background:rgba(0,0,0,.6); padding:6px; max-height:40%;
+         overflow:hidden; font-size:14px; line-height:1.35; }
+  .dot { position:fixed; width:36px; height:36px; border-radius:50%;
+         margin:-18px 0 0 -18px; pointer-events:none; z-index:5;
+         opacity:.9; transition:opacity 1.2s; }
+  .touch { background:#2ecc71; }
+  .mouse { background:#e74c3c; width:24px; height:24px; margin:-12px 0 0 -12px; }
+  .grid { position:fixed; border:1px dashed #333; pointer-events:none; }
+</style>
+</head>
+<body>
+<div id="legend">綠=touch事件 紅=mouse事件<br>點哪裡就該亮哪裡</div>
+<div id="log"></div>
+<script>
+const log = document.getElementById('log');
+let lines = [];
+let t0 = 0;
+function addLog(s) {
+  const now = performance.now();
+  const dt = t0 ? (now - t0).toFixed(0) : 0;
+  t0 = now;
+  lines.unshift((+dt) + 'ms | ' + s);
+  lines = lines.slice(0, 10);
+  log.innerHTML = lines.join('<br>');
+}
+function dot(x, y, cls) {
+  const d = document.createElement('div');
+  d.className = 'dot ' + cls;
+  d.style.left = x + 'px';
+  d.style.top = y + 'px';
+  document.body.appendChild(d);
+  setTimeout(() => { d.style.opacity = 0; }, 900);
+  setTimeout(() => { d.remove(); }, 2400);
+}
+for (const ev of ['touchstart','touchend']) {
+  addEventListener(ev, e => {
+    for (const t of e.changedTouches) {
+      if (ev === 'touchstart') dot(t.clientX, t.clientY, 'touch');
+      addLog(ev + ' ' + t.clientX.toFixed(0) + ',' + t.clientY.toFixed(0) +
+             ' id=' + t.identifier);
+    }
+  }, {passive: true});
+}
+addEventListener('touchmove', e => {
+  for (const t of e.changedTouches) dot(t.clientX, t.clientY, 'touch');
+}, {passive: true});
+for (const ev of ['mousedown','mouseup','click']) {
+  addEventListener(ev, e => {
+    dot(e.clientX, e.clientY, 'mouse');
+    addLog(ev + ' ' + e.clientX + ',' + e.clientY);
+  });
+}
+addLog('ready ' + innerWidth + 'x' + innerHeight);
+</script>
+</body>
+</html>

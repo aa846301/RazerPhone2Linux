@@ -18,15 +18,10 @@ KERNEL_DIR="$WORKDIR/kernel/linux"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$PROJECT_DIR/config/kernel-source.env"
 source "$PROJECT_DIR/config/build.env"
-IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-printer}"
-KERNEL_SCOPE="${RAZER_KERNEL_SCOPE:-full}"
+IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-base}"
 case "$IMAGE_PROFILE" in
-    base|printer) ;;
-    *) echo "ERROR: RAZER_IMAGE_PROFILE must be base or printer."; exit 2 ;;
-esac
-case "$KERNEL_SCOPE" in
-    full|display) ;;
-    *) echo "ERROR: RAZER_KERNEL_SCOPE must be full or display."; exit 2 ;;
+    base) ;;
+    *) echo "ERROR: RAZER_IMAGE_PROFILE must be base."; exit 2 ;;
 esac
 OUTPUT_DIR="$WORKDIR/output/$IMAGE_PROFILE"
 WIN_OUTPUT_DIR="$PROJECT_DIR/output/$IMAGE_PROFILE"
@@ -39,13 +34,9 @@ export CROSS_COMPILE=aarch64-linux-gnu-
 # commit that is intentionally not an upstream annotated release tag.
 export LOCALVERSION=""
 
-MAX_JOBS="${RAZER_BUILD_JOBS:-4}"
-case "$MAX_JOBS" in
-    ''|*[!0-9]*|0)
-        echo "ERROR: RAZER_BUILD_JOBS must be a positive integer."
-        exit 2
-        ;;
-esac
+# Default to 8 jobs (12-core host: leaves headroom for the desktop; the old
+# hard cap of 4 wasted most of the machine). Override with RAZER_MAX_JOBS.
+MAX_JOBS="${RAZER_MAX_JOBS:-8}"
 NPROC=$(nproc)
 if [ "$NPROC" -gt "$MAX_JOBS" ]; then
     BUILD_JOBS="$MAX_JOBS"
@@ -58,7 +49,6 @@ echo " Razer Phone 2 - Kernel Build"
 echo "========================================"
 echo "Kernel dir: $KERNEL_DIR"
 echo "Image profile: $IMAGE_PROFILE"
-echo "Build scope: $KERNEL_SCOPE"
 echo "Parallel jobs: $BUILD_JOBS"
 echo ""
 
@@ -96,15 +86,71 @@ fi
 echo "[1/6] Installing device tree and panel driver..."
 
 # Copy DTS
-install -v -m 0644 "$PROJECT_DIR/dts/sdm845-razer-aura.dts" \
-    "$KERNEL_DIR/arch/arm64/boot/dts/qcom/sdm845-razer-aura.dts"
+DTS_DST="$KERNEL_DIR/arch/arm64/boot/dts/qcom/sdm845-razer-aura.dts"
+cp -v "$PROJECT_DIR/dts/sdm845-razer-aura.dts" "$DTS_DST"
+
+# Keep the checked-in DTS on the proven simplefb path by default.
+# Native panel bring-up is opt-in so test artifacts can enable MDSS/DSI
+# without making every normal build seize the bootloader framebuffer.
+#
+# RAZER_DISPLAY_NATIVE_PANEL=1 enables the whole native display path.
+# RAZER_DISPLAY_NATIVE_PANEL_NODES accepts a comma/space separated subset, for
+# staged debugging, for example:
+#   RAZER_DISPLAY_NATIVE_PANEL_NODES=dispcc
+#   RAZER_DISPLAY_NATIVE_PANEL_NODES="dispcc,mdss,mdss_mdp"
+PANEL_NODE_LIST="${RAZER_DISPLAY_NATIVE_PANEL_NODES:-}"
+if [ "${RAZER_DISPLAY_NATIVE_PANEL:-0}" = "1" ] && [ -z "$PANEL_NODE_LIST" ]; then
+    PANEL_NODE_LIST="dispcc mdss mdss_mdp mdss_dsi0 mdss_dsi0_phy mdss_dsi1 mdss_dsi1_phy gpu"
+fi
+
+if [ -n "$PANEL_NODE_LIST" ]; then
+    echo "  Enabling native display DTS nodes for this build: $PANEL_NODE_LIST"
+    python3 - "$DTS_DST" "$PANEL_NODE_LIST" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+labels = [item for item in re.split(r"[\s,]+", sys.argv[2].strip()) if item]
+text = path.read_text()
+
+valid = {
+    "dispcc",
+    "mdss",
+    "mdss_mdp",
+    "mdss_dsi0",
+    "mdss_dsi0_phy",
+    "mdss_dsi1",
+    "mdss_dsi1_phy",
+    "gpu",
+}
+
+unknown = sorted(set(labels) - valid)
+if unknown:
+    raise SystemExit(f"unknown native display DTS node(s): {', '.join(unknown)}")
+
+for label in labels:
+    pattern = re.compile(r"(&" + re.escape(label) + r"\s*\{.*?\n\};)", re.S)
+
+    def enable(match):
+        block = match.group(1)
+        if re.search(r'status\s*=\s*"[^"]+";', block):
+            block = re.sub(r'status\s*=\s*"[^"]+";', 'status = "okay";', block, count=1)
+        else:
+            block = block.replace("{", '{\n\tstatus = "okay";', 1)
+        return block
+
+    text, count = pattern.subn(enable, text, count=1)
+    if count != 1:
+        raise SystemExit(f"failed to enable &{label} in {path}")
+
+path.write_text(text)
+PY
+fi
 
 # Copy panel driver
-install -v -m 0644 "$PROJECT_DIR/panel-driver/panel-novatek-nt36830.c" \
+cp -v "$PROJECT_DIR/panel-driver/panel-novatek-nt36830.c" \
     "$KERNEL_DIR/drivers/gpu/drm/panel/panel-novatek-nt36830.c"
-
-install -v -m 0644 "$PROJECT_DIR/panel-driver/novatek,nt36830.yaml" \
-    "$KERNEL_DIR/Documentation/devicetree/bindings/display/panel/novatek,nt36830.yaml"
 
 # -------------------------------------------------------
 # Step 2: Patch DTS Makefile to include our device tree
@@ -195,8 +241,7 @@ fi
 # obvious exactly what was built.
 if [ -n "$(git -C "$KERNEL_DIR" status --porcelain)" ]; then
     if [ -z "$(git -C "$KERNEL_DIR" branch --show-current)" ]; then
-        integration_branch="razerphone2linux/integration-${KERNEL_COMMIT:0:12}"
-        git -C "$KERNEL_DIR" switch -C "$integration_branch"
+        git -C "$KERNEL_DIR" switch -c razerphone2linux/integration
     fi
     git -C "$KERNEL_DIR" add -A
     git -C "$KERNEL_DIR" \
@@ -227,21 +272,7 @@ else
     exit 1
 fi
 
-# The SDM845 tree ships two maintained fragments on top of arm64 defconfig.
-# Apply them before the project fragments; using defconfig alone is not the
-# configuration tested by sdm845-mainline.
-for upstream_fragment in \
-    arch/arm64/configs/sdm845.config \
-    arch/arm64/configs/misc.config; do
-    if [ ! -f "$upstream_fragment" ]; then
-        echo "ERROR: missing SDM845 upstream config fragment: $upstream_fragment"
-        exit 1
-    fi
-    echo "Applying SDM845 upstream config fragment: $upstream_fragment"
-    ./scripts/kconfig/merge_config.sh -m .config "$upstream_fragment"
-done
-
-# Apply the canonical Razer config fragment.
+# Apply the single canonical config fragment.
 CONFIG_FRAGMENT="$PROJECT_DIR/config/razer-aura.config"
 if [ ! -f "$CONFIG_FRAGMENT" ]; then
     echo "ERROR: missing canonical config fragment: $CONFIG_FRAGMENT"
@@ -252,17 +283,44 @@ echo "Applying Razer Phone 2 config fragment: $CONFIG_FRAGMENT"
 sed 's/\r$//' "$CONFIG_FRAGMENT" > /tmp/razer_aura_fragment.config
 ./scripts/kconfig/merge_config.sh -m .config /tmp/razer_aura_fragment.config
 
-if [ "$IMAGE_PROFILE" = "printer" ]; then
-    PRINTER_CONFIG_FRAGMENT="$PROJECT_DIR/config/razer-aura-printer.config"
-    echo "Applying printer-host config fragment: $PRINTER_CONFIG_FRAGMENT"
-    sed 's/\r$//' "$PRINTER_CONFIG_FRAGMENT" > /tmp/razer_aura_printer_fragment.config
-    ./scripts/kconfig/merge_config.sh -m .config /tmp/razer_aura_printer_fragment.config
+if [ "${RAZER_DISPLAY_NATIVE_PANEL:-0}" = "1" ] || [ "${RAZER_DISPLAY_NATIVE_PANEL_BUILTIN:-0}" = "1" ]; then
+    echo "Applying native-panel test config overrides."
+    # The panel is allowed to be built in -- only WiFi/modem must stay
+    # modular. DRM_MSM's own Kconfig has `select QCOM_MDT_LOADER if
+    # ARCH_QCOM` unconditionally, so DRM_MSM=y always drags
+    # QCOM_MDT_LOADER to =y too. This is a normal, legal Kconfig
+    # combination (a =m driver depending on a =y library is completely
+    # standard), so qcom_q6v5_mss.ko (kept =m below) SHOULD still load;
+    # if it doesn't, that is a real bug to diagnose with dmesg, not
+    # something to route around by making WiFi builtin.
+    # DRM_MSM can only be built in when optional QCOM_OCMEM is built in or off;
+    # turn it off for SDM845 panel tests so olddefconfig does not force
+    # DRM_MSM back to a module.
+    ./scripts/config --disable QCOM_OCMEM
+    ./scripts/config --enable DRM_MSM
+    ./scripts/config --enable DRM_PANEL_NOVATEK_NT36830
 fi
 
-# Keep the Qualcomm Wi-Fi bring-up chain aligned with the postmarketOS SDM845
-# reference config. The remoteprocs are modules so userspace can start the
-# MSS/RFS path after rootfs services are available, while GLINK/SMD core
-# transports stay built in like the working pmOS SDM845 kernels.
+if [ "${RAZER_EARLY_DEBUG_LOG:-0}" = "1" ]; then
+    echo "Applying early-crash log retention config overrides."
+    # Keep these opt-in: they are for bring-up artifacts that may hang or reboot
+    # before userspace can load modules.  In particular, build the SDM845 APSS
+    # watchdog driver into the kernel so a bootloader-enabled watchdog is
+    # claimed before an early display/DRM failure can silently reset the phone.
+    ./scripts/config --enable QCOM_WDT
+    ./scripts/config --enable PSTORE
+    ./scripts/config --enable PSTORE_CONSOLE
+    ./scripts/config --enable PSTORE_RAM
+    ./scripts/config --set-val PSTORE_DEFAULT_KMSG_BYTES 262144
+    ./scripts/config --enable MAGIC_SYSRQ
+fi
+
+# June parity (2026-07-03): the known-good June image runs this entire chain
+# BUILT IN (its module tree has zero q6v5/ipa/ath10k/qrtr/glink .ko files).
+# The previous "postmarketOS alignment" block here forced everything to =m,
+# which is the only binary-level difference to the fresh builds that hard-
+# reset ~30s after boot. Keep the chain =y; do not reintroduce --module here
+# without retesting on the device.
 ./scripts/config --module CFG80211
 ./scripts/config --module MAC80211
 ./scripts/config --module ATH10K
@@ -311,21 +369,12 @@ echo "[4/6] Kernel configured."
 # Step 5: Build kernel, DTBs, and modules
 # -------------------------------------------------------
 echo "[5/6] Building kernel (this will take a while)..."
-if [ "$KERNEL_SCOPE" = "display" ]; then
-    BUILD_TARGETS=(Image.gz dtbs)
-else
-    BUILD_TARGETS=(Image.gz dtbs modules)
-fi
-
-if ! make -j"$BUILD_JOBS" "${BUILD_TARGETS[@]}" 2>&1 | tee "$OUTPUT_DIR/build.log"; then
+if ! make -j"$BUILD_JOBS" Image.gz dtbs modules 2>&1 | tee "$OUTPUT_DIR/build.log"; then
     echo '' | tee -a "$OUTPUT_DIR/build.log"
     echo 'Parallel build failed under WSL, retrying with -j1 for a stable artifact...' | tee -a "$OUTPUT_DIR/build.log"
     make olddefconfig 2>&1 | tee -a "$OUTPUT_DIR/build.log"
-    make prepare 2>&1 | tee -a "$OUTPUT_DIR/build.log"
-    if [ "$KERNEL_SCOPE" = "full" ]; then
-        make modules_prepare 2>&1 | tee -a "$OUTPUT_DIR/build.log"
-    fi
-    make -j1 "${BUILD_TARGETS[@]}" 2>&1 | tee -a "$OUTPUT_DIR/build.log"
+    make prepare modules_prepare 2>&1 | tee -a "$OUTPUT_DIR/build.log"
+    make -j1 Image.gz dtbs modules 2>&1 | tee -a "$OUTPUT_DIR/build.log"
 fi
 
 echo "[5/6] Build complete."
@@ -335,32 +384,34 @@ echo "[5/6] Build complete."
 # -------------------------------------------------------
 echo "[6/6] Collecting build outputs..."
 
-KERNEL_RELEASE=$(make -s kernelrelease)
-if [ "$KERNEL_SCOPE" = "full" ]; then
-    rm -rf "$OUTPUT_DIR/modules_install"
-    make INSTALL_MOD_PATH="$OUTPUT_DIR/modules_install" modules_install
-    echo "$KERNEL_RELEASE" > "$OUTPUT_DIR/kernel.release"
-    rm -f "$OUTPUT_DIR/display.kernel-release"
+# Install modules to output directory
+rm -rf "$OUTPUT_DIR/modules_install"
+# INSTALL_MOD_STRIP: the config carries DEBUG_INFO=y, and unstripped .ko
+# files balloon each module tree to ~330MB (the rootfs ships two kernels).
+# Stripped trees are ~1/4 the size; debug symbols stay in the build tree.
+make INSTALL_MOD_PATH="$OUTPUT_DIR/modules_install" INSTALL_MOD_STRIP=1 modules_install
 
-    for module_path in \
-        "kernel/drivers/net/wireless/ath/ath10k/ath10k_core.ko" \
-        "kernel/drivers/net/wireless/ath/ath10k/ath10k_snoc.ko" \
-        "kernel/drivers/remoteproc/qcom_q6v5.ko" \
-        "kernel/drivers/remoteproc/qcom_q6v5_mss.ko" \
-        "kernel/drivers/remoteproc/qcom_q6v5_pas.ko" \
-        "kernel/drivers/remoteproc/qcom_wcnss_pil.ko" \
-        "kernel/drivers/net/ipa/ipa.ko"; do
-        installed_module="$OUTPUT_DIR/modules_install/lib/modules/$KERNEL_RELEASE/$module_path"
-        if [ ! -f "$installed_module" ] && [ ! -f "$installed_module.zst" ]; then
-            echo "ERROR: expected SDM845 Wi-Fi/MSS module missing after modules_install: $module_path"
-            exit 1
-        fi
-    done
-else
-    rm -rf "$OUTPUT_DIR/modules_install"
-    rm -f "$OUTPUT_DIR/kernel.release"
-    echo "$KERNEL_RELEASE" > "$OUTPUT_DIR/display.kernel-release"
-fi
+KERNEL_RELEASE=$(make -s kernelrelease)
+echo "$KERNEL_RELEASE" > "$OUTPUT_DIR/kernel.release"
+cp -f "$KERNEL_DIR/.config" "$OUTPUT_DIR/config-$KERNEL_RELEASE"
+cp -f "$KERNEL_DIR/.config" "$OUTPUT_DIR/kernel.config"
+# The Wi-Fi/MSS chain is built in for June parity (see the config block
+# above), so verify presence via modules.builtin instead of .ko files.
+MODULES_BUILTIN="$OUTPUT_DIR/modules_install/lib/modules/$KERNEL_RELEASE/modules.builtin"
+for builtin_path in \
+    "kernel/drivers/net/wireless/ath/ath10k/ath10k_core.ko" \
+    "kernel/drivers/net/wireless/ath/ath10k/ath10k_snoc.ko" \
+    "kernel/drivers/remoteproc/qcom_q6v5.ko" \
+    "kernel/drivers/remoteproc/qcom_q6v5_mss.ko" \
+    "kernel/drivers/remoteproc/qcom_q6v5_pas.ko" \
+    "kernel/drivers/remoteproc/qcom_wcnss_pil.ko" \
+    "kernel/drivers/net/ipa/ipa.ko"; do
+    if ! grep -qx "$builtin_path" "$MODULES_BUILTIN" && \
+       [ ! -f "$OUTPUT_DIR/modules_install/lib/modules/$KERNEL_RELEASE/$builtin_path" ]; then
+        echo "ERROR: SDM845 Wi-Fi/MSS driver missing (neither builtin nor module): $builtin_path"
+        exit 1
+    fi
+done
 
 # Copy kernel image
 cp -v arch/arm64/boot/Image.gz "$OUTPUT_DIR/Image.gz"
@@ -387,13 +438,9 @@ copy_aux_output() {
 copy_aux_output "$OUTPUT_DIR/Image.gz" "$WIN_OUTPUT_DIR/Image.gz"
 copy_aux_output "$OUTPUT_DIR/sdm845-razer-aura.dtb" "$WIN_OUTPUT_DIR/sdm845-razer-aura.dtb"
 copy_aux_output "$OUTPUT_DIR/Image.gz-dtb" "$WIN_OUTPUT_DIR/Image.gz-dtb"
-if [ "$KERNEL_SCOPE" = "full" ]; then
-    copy_aux_output "$OUTPUT_DIR/kernel.release" "$WIN_OUTPUT_DIR/kernel.release"
-    rm -f "$WIN_OUTPUT_DIR/display.kernel-release"
-else
-    copy_aux_output "$OUTPUT_DIR/display.kernel-release" "$WIN_OUTPUT_DIR/display.kernel-release"
-    rm -f "$WIN_OUTPUT_DIR/kernel.release"
-fi
+copy_aux_output "$OUTPUT_DIR/kernel.release" "$WIN_OUTPUT_DIR/kernel.release"
+copy_aux_output "$OUTPUT_DIR/config-$KERNEL_RELEASE" "$WIN_OUTPUT_DIR/config-$KERNEL_RELEASE"
+copy_aux_output "$OUTPUT_DIR/kernel.config" "$WIN_OUTPUT_DIR/kernel.config"
 echo "mainline" > "$OUTPUT_DIR/kernel.flavor"
 copy_aux_output "$OUTPUT_DIR/kernel.flavor" "$WIN_OUTPUT_DIR/kernel.flavor"
 
@@ -406,13 +453,8 @@ echo "Outputs in: $OUTPUT_DIR"
 echo "  Image.gz            - Compressed kernel image"
 echo "  sdm845-razer-aura.dtb - Device tree blob"
 echo "  Image.gz-dtb        - Combined kernel + DTB"
-if [ "$KERNEL_SCOPE" = "full" ]; then
-    echo "  modules_install/    - Kernel modules"
-    echo "  kernel.release      - Kernel release string for rootfs/boot checks"
-else
-    echo "  display.kernel-release - Display-only compile validation"
-    echo "  NOTE: this partial artifact cannot be packaged with rootfs."
-fi
+echo "  modules_install/    - Kernel modules"
+echo "  kernel.release      - Kernel release string for rootfs/boot checks"
 echo "  build.log           - Build log"
 echo ""
 echo "Next: Run bash 03-build-rootfs.sh"

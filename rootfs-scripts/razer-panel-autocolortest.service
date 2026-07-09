@@ -1,0 +1,16 @@
+[Unit]
+Description=Auto-run panel split-color test once on every boot (DSI0 PHY tuning iteration)
+Documentation=file:/usr/share/doc/razerphone2linux/nt36830-factory-driver-comparison.md
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=oneshot
+# red|green split, black center column: the established discriminator for the
+# DSI0 (left) striping issue. Stripes on the left = this boot's PHY tuning
+# value did not help; clean = it did. See razer-panel-colortest --split.
+ExecStart=/usr/local/sbin/razer-panel-colortest --split red green
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

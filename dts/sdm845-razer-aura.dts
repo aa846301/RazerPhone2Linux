@@ -76,6 +76,20 @@
 			stride = <(1440 * 4)>;
 			format = "a8r8g8b8";
 
+			/*
+			 * Fake panel node for simpledrm DPI calculation and saner probe
+			 * ordering, following the conservative SDM845 phone bring-up pattern.
+			 * 2026-07-06: this was dropped when the 7.1 DTS was adopted from
+			 * codex/linux-7.1-display, which is why 7.1 had no /dev/fb0 or
+			 * /dev/dri at all (simpledrm never created a device) even though
+			 * the same physical bootloader framebuffer worked fine on 6.16.
+			 */
+			panel = <&fb_panel>;
+
+			fb_panel: fb-panel {
+				width-mm = <71>;
+				height-mm = <126>;
+			};
 		};
 	};
 
@@ -118,6 +132,23 @@
 	};
 
 	reserved-memory {
+		/*
+		 * Bootloader-painted splash/continuous-splash framebuffer.
+		 * 2026-07-07: this region was never marked no-map, so it stayed
+		 * part of generic System RAM (confirmed via /proc/iomem:
+		 * 97c00000-aeffffff : System RAM covers it). Newer simpledrm
+		 * added a strict devm_request_mem_region() acquire in its probe
+		 * path, which then fails with -ENOMEM ("could not acquire memory
+		 * region") because normal System RAM is already claimed by the
+		 * kernel's own memory management. The older simpledrm on 6.16
+		 * tolerated the missing reservation; 7.1 does not. Must exactly
+		 * match the /chosen/framebuffer@9d400000 reg below.
+		 */
+		cont_splash_mem: framebuffer-mem@9d400000 {
+			reg = <0 0x9d400000 0 0x00f00000>;
+			no-map;
+		};
+
 		/*
 		 * Razer and OnePlus Android downstream DTBs describe rmtfs as a
 		 * dynamically allocated 2 MiB sharedmem-uio region with guard memory.
@@ -515,6 +546,17 @@
 };
 
 /*
+ * Adreno 630 zap shader: device-signed split image extracted from the
+ * phone's Android vendor_a partition (/vendor/firmware/a630_zap.*). The
+ * .mdt split format is loaded by the same mdt loader as .mbn. Generic
+ * a630_sqe.fw comes from the same partition; a630_gmu.bin from
+ * linux-firmware. Same firmware-name pattern as sdm845-oneplus-common.
+ */
+&gpu_zap_shader {
+	firmware-name = "qcom/sdm845/Razer/aura/a630_zap.mdt";
+};
+
+/*
  * ==========================================================================
  * Touchscreen (Synaptics RMI4 DSX)
  * ==========================================================================
@@ -593,6 +635,19 @@
 
 &mdss_dsi0 {
 	status = "disabled";
+	/*
+	 * 2026-07-07: mainline's own sdm845.dtsi sets no vdda-supply on
+	 * EITHER dsi0 or dsi1 -- this property only exists in this board
+	 * file, and it was only ever added to mdss_dsi1 below, not here.
+	 * The factory board DTS powers both DSI controllers from the same
+	 * named 1.2V analog rail symmetrically (dsi_ctrl0/dsi_ctrl1 both
+	 * have vdda-1p2-supply = <&pm8998_l26> in sdm845-sde.dtsi). Leaving
+	 * DSI0 without this supply left its analog PLL/PHY rail unpowered
+	 * by devicetree while DSI1's was properly enabled -- matches the
+	 * observed symptom exactly (stripes/signal-integrity issue on DSI0
+	 * only, DSI1 clean).
+	 */
+	vdda-supply = <&vdda_mipi_dsi0_1p2>;
 
 	qcom,dual-dsi-mode;
 	qcom,master-dsi;
@@ -664,6 +719,17 @@
 
 &mdss_dsi0_phy {
 	status = "disabled";
+	/*
+	 * 2026-07-07: factory panel DTS
+	 * (qcom,mdss_dsi_nt36830_wqhd_dualdsi_extclk_cmd) hand-tunes these two
+	 * D-PHY clock-lane timing values for this exact panel+board instead of
+	 * using the SoC-generic computed defaults. Requires kernel-patches/
+	 * 0002-drm-msm-dsi-honor-factory-clk-post-pre-override.patch --
+	 * mainline's dsi_phy_10nm.c has no DT plumbing for these two factory
+	 * properties otherwise and would silently ignore them.
+	 */
+	qcom,mdss-dsi-t-clk-post = <0x0b>;
+	qcom,mdss-dsi-t-clk-pre = <0x21>;
 };
 
 /*
@@ -689,6 +755,14 @@
 
 &mdss_dsi1_phy {
 	status = "disabled";
+	/*
+	 * LK ground truth (register capture 2026-07-07): the bootloader
+	 * programs t_clk_post/pre = 0x0b/0x21 on BOTH DSI controllers, not
+	 * just DSI0. Same mechanism as the dsi0_phy override above
+	 * (kernel-patches/0002).
+	 */
+	qcom,mdss-dsi-t-clk-post = <0x0b>;
+	qcom,mdss-dsi-t-clk-pre = <0x21>;
 };
 
 /*

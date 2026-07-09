@@ -59,10 +59,9 @@ systemctl enable NetworkManager 2>/dev/null || true
 
 cat > /etc/systemd/system/razer-wifi-ready.service <<'WIFI_READY_EOF'
 [Unit]
-Description=Wait for Razer Phone 2 WiFi before starting HelixScreen
+Description=Wait for Razer Phone 2 WiFi before network-dependent services
 Wants=NetworkManager.service tqftpserv.service rmtfs.service
 After=systemd-modules-load.service NetworkManager.service tqftpserv.service rmtfs.service
-Before=helixscreen.service
 
 [Service]
 Type=oneshot
@@ -146,10 +145,11 @@ Wants=usb-gadget.service
 GADGET_DROPIN_EOF
 
 cat > /etc/modules-load.d/razer-aura.conf << 'MODULES_EOF'
-# Razer Phone 2 kernel modules
+# Razer Phone 2 kernel modules (June-proven set).
 # Keep MDSS/DSI/MSM DRM out of the default path. The practical display path is
-# bootloader framebuffer -> simpledrm/fbdev -> HelixScreen.
-# WiFi
+# bootloader framebuffer -> simpledrm/fbdev (native NT36830 panel comes later).
+# qcom_q6v5_mss must load early: rmtfs -P needs the mss remoteproc device to
+# exist before it starts, and the modem itself waits for the RFS QMI service.
 qcom_sysmon
 qcom_q6v5_mss
 ath10k_core
@@ -157,6 +157,62 @@ ath10k_snoc
 # Touchscreen
 rmi_i2c
 MODULES_EOF
+
+# Only IPA is kept away from autoload: bringing it up while the modem stack
+# is broken or the modem is down hard-resets the SoC ~30s later (TZ/XPU
+# class, silent). razer-wifi-ready loads it after verifying the pmOS-
+# documented userspace set (rmtfs/pd-mapper/tqftpserv/qrtr-ns) and a running
+# modem. Note: blacklist only blocks udev alias autoload; the guarded
+# explicit modprobe in razer-wifi-ready still works.
+cat > /etc/modprobe.d/razer-staged-bringup.conf << 'STAGED_EOF'
+blacklist ipa
+STAGED_EOF
+
+# The modem userspace stack must survive early races (pd-mapper needs qrtr,
+# rmtfs -P needs the mss rproc device): retry forever instead of dying to
+# the default start-limit after 5 attempts.
+mkdir -p /etc/systemd/system/pd-mapper.service.d
+cat > /etc/systemd/system/pd-mapper.service.d/razer-resilience.conf << 'PDM_RES_EOF'
+[Unit]
+After=qrtr-ns.service systemd-modules-load.service
+StartLimitIntervalSec=0
+
+[Service]
+Restart=on-failure
+RestartSec=2
+PDM_RES_EOF
+
+mkdir -p /etc/systemd/system/rmtfs.service.d
+cat > /etc/systemd/system/rmtfs.service.d/razer-resilience.conf << 'RMTFS_RES_EOF'
+[Unit]
+After=systemd-modules-load.service
+StartLimitIntervalSec=0
+
+[Service]
+RestartSec=2
+RMTFS_RES_EOF
+
+# Warm reboot used to hang in an RCU-stall storm: systemd stops the QMI
+# userspace (tqftpserv/rmtfs/...) while the remoteprocs are still running,
+# and the modem teardown then stalls cpu1's timer softirq forever. Stop the
+# remoteprocs FIRST on shutdown: this unit starts after the modem stack, so
+# its ExecStop runs before those services stop (reverse order).
+cat > /etc/systemd/system/razer-modem-stop.service << 'MODEM_STOP_EOF'
+[Unit]
+Description=Stop Qualcomm remoteprocs before the QMI userspace goes away
+After=rmtfs.service pd-mapper.service tqftpserv.service qrtr-ns.service razer-wifi-ready.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/bin/sh -c 'for r in /sys/class/remoteproc/remoteproc*; do [ "$(cat $r/state 2>/dev/null)" = "running" ] && echo stop > $r/state 2>/dev/null; done; true'
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
+MODEM_STOP_EOF
+systemctl enable razer-modem-stop.service 2>/dev/null || true
 
 rm -f /etc/modprobe.d/razer-late-modem-test.conf
 
@@ -313,95 +369,6 @@ MSS_DIAG_EOF
     fi
 fi
 
-if [ -f /etc/systemd/system/helixscreen.service ]; then
-    mkdir -p /etc/systemd/system/helixscreen.service.d
-    cat > /etc/systemd/system/helixscreen.service.d/razer-wifi-ready.conf <<'HELIX_WIFI_EOF'
-[Unit]
-Wants=razer-wifi-ready.service NetworkManager.service
-After=razer-wifi-ready.service NetworkManager.service
-HELIX_WIFI_EOF
-
-    cat > /etc/systemd/system/helixscreen.service.d/razer-fbdev.conf <<'HELIX_OVERRIDE_EOF'
-[Service]
-Environment="HELIX_DISPLAY_BACKEND=fbdev"
-Environment="HELIX_DISPLAY_ROTATION=90"
-Environment="HELIX_COLOR_SWAP_RB=1"
-Environment="HELIX_TOUCH_DEVICE=/dev/input/event0"
-Environment="HELIX_MOUSE_DEVICE="
-HELIX_OVERRIDE_EOF
-
-    cat > /etc/systemd/system/helixscreen.service.d/razer-keep-fbcon.conf <<'HELIX_FBCON_EOF'
-[Service]
-Environment="HELIX_KEEP_FBCON=1"
-ExecStartPre=
-ExecStartPre=/bin/sh -c 'systemctl stop display-sleep.service 2>/dev/null || true'
-ExecStartPre=+/home/klipper/helixscreen/config/ensure-polkit-rule.sh klipper
-ExecStartPre=+/bin/sh -c 'u=klipper; g=klipper; [ "$$u" != "root" ] && chown -Rh "$$u:$$g" "/home/klipper/helixscreen" 2>/dev/null || true'
-ExecStartPre=+/bin/sh -c 'echo 0 > /sys/class/graphics/fb0/blank 2>/dev/null || true'
-HELIX_FBCON_EOF
-
-    cat > /etc/systemd/system/helixscreen.service.d/razer-no-kd-graphics.conf <<'HELIX_NO_KD_EOF'
-[Service]
-AmbientCapabilities=
-AmbientCapabilities=CAP_SYS_BOOT
-HELIX_NO_KD_EOF
-
-    if [ -f /home/klipper/helixscreen/bin/helix-launcher.sh ]; then
-        cp -n /home/klipper/helixscreen/bin/helix-launcher.sh \
-            /home/klipper/helixscreen/bin/helix-launcher.sh.before-razer-keep-fbcon 2>/dev/null || true
-        python3 - <<'HELIX_PATCH_EOF'
-from pathlib import Path
-
-p = Path('/home/klipper/helixscreen/bin/helix-launcher.sh')
-s = p.read_text()
-old = '''# Unbind the kernel console from the framebuffer so it doesn't paint text
-# over the UI. This affects vtcon1 (the fbcon driver); vtcon0 is the dummy.
-for vtcon in /sys/class/vtconsole/vtcon*/bind; do
-    [ -f "$vtcon" ] && echo 0 > "$vtcon" 2>/dev/null || true
-done
-'''
-new = '''# Unbind the kernel console from the framebuffer so it doesn't paint text
-# over the UI. This affects vtcon1 (the fbcon driver); vtcon0 is the dummy.
-# Razer Phone 2 simplefb bring-up needs fbcon kept bound to preserve physical
-# bootloader scanout while HelixScreen uses /dev/fb0.
-if [ "${HELIX_KEEP_FBCON:-0}" != "1" ]; then
-    for vtcon in /sys/class/vtconsole/vtcon*/bind; do
-        [ -f "$vtcon" ] && echo 0 > "$vtcon" 2>/dev/null || true
-    done
-fi
-'''
-if 'HELIX_KEEP_FBCON' not in s and old in s:
-    p.write_text(s.replace(old, new))
-HELIX_PATCH_EOF
-        chown klipper:klipper /home/klipper/helixscreen/bin/helix-launcher.sh 2>/dev/null || true
-        chmod 0755 /home/klipper/helixscreen/bin/helix-launcher.sh
-    fi
-
-    if [ -f /home/klipper/helixscreen/config/settings.json ]; then
-        python3 - <<'HELIX_SETTINGS_EOF'
-import json
-from pathlib import Path
-
-p = Path('/home/klipper/helixscreen/config/settings.json')
-data = json.loads(p.read_text())
-data['dark_mode'] = False
-# WiFi works now (MSS fih_nv share + HOST_CAP skip + tqftpserv v1.2), so let
-# HelixScreen show and manage WiFi instead of hiding it.
-data['wifi_expected'] = True
-display = data.setdefault('display', {})
-display['rotate'] = 90
-display['rotation_probed'] = True
-display['dim_sec'] = 86400
-display['sleep_sec'] = 86400
-display['dim_brightness'] = 100
-p.write_text(json.dumps(data, indent=2) + '\n')
-HELIX_SETTINGS_EOF
-        chown klipper:klipper /home/klipper/helixscreen/config/settings.json 2>/dev/null || true
-    fi
-
-    systemctl mask display-sleep.service 2>/dev/null || true
-    systemctl enable helixscreen.service 2>/dev/null || true
-fi
 
 cat > /usr/local/bin/razer-display-keepalive.sh <<'DISPLAY_KEEPALIVE_EOF'
 #!/bin/bash
@@ -422,7 +389,6 @@ cat > /etc/systemd/system/razer-display-keepalive.service <<'DISPLAY_SERVICE_EOF
 [Unit]
 Description=Keep Razer bootloader framebuffer visible
 After=systemd-udev-settle.service
-Before=helixscreen.service
 Wants=systemd-udev-settle.service
 
 [Service]

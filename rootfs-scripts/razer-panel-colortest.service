@@ -1,0 +1,16 @@
+[Unit]
+Description=Panel bring-up color-fill test (manual/debug only, not enabled by default)
+Documentation=file:/usr/share/doc/razerphone2linux/nt36830-factory-driver-comparison.md
+DefaultDependencies=no
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/razer-panel-colortest
+Restart=no
+
+# Not enabled/installed by default: this is a display bring-up debug tool.
+# Run ad hoc with:
+#   systemctl start razer-panel-colortest
+# or one-shot from the command line:
+#   razer-panel-colortest --once red

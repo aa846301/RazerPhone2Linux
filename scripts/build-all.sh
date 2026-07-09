@@ -4,6 +4,8 @@
 # Usage:
 #   bash scripts/build-all.sh all       # kernel + rootfs + boot
 #   bash scripts/build-all.sh validate-boot # kernel/DTB + boot, no rootfs refresh
+#   bash scripts/build-all.sh pmos-contrast # pmOS SDM845 kernel + rootfs refresh + boot
+#   bash scripts/build-all.sh pmos-mss-diag # matched MSS diagnostic artifact
 #   bash scripts/build-all.sh kernel
 #   bash scripts/build-all.sh rootfs
 #   bash scripts/build-all.sh refresh-rootfs
@@ -17,7 +19,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WIN_REPO="${WIN_REPO:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 RAZER_WORKDIR="${RAZER_WORKDIR:-$HOME/razorphone2linux}"
-RAZER_IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-printer}"
+RAZER_IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-base}"
 RAZER_UBUNTU_MIRROR="${RAZER_UBUNTU_MIRROR:-https://ports.ubuntu.com/ubuntu-ports}"
 MODE="${1:-all}"
 SUDO_READY=0
@@ -90,7 +92,7 @@ run_refresh_rootfs() {
 }
 
 case "$MODE" in
-    all|rootfs|refresh-rootfs|validate)
+    all|rootfs|refresh-rootfs|validate|pmos-contrast|pmos-mss-diag)
         prepare_sudo
         ;;
 esac
@@ -103,6 +105,22 @@ case "$MODE" in
         ;;
     kernel)
         bash "$WIN_REPO/scripts/02-build-kernel.sh"
+        ;;
+    pmos-kernel)
+        bash "$WIN_REPO/scripts/02-build-pmos-kernel-contrast.sh"
+        ;;
+    pmos-contrast)
+        bash "$WIN_REPO/scripts/02-build-pmos-kernel-contrast.sh"
+        run_refresh_rootfs
+        bash "$WIN_REPO/scripts/04-make-boot-image.sh"
+        ;;
+    pmos-mss-diag)
+        PMOS_APPLY_DIAG_PATCHES=1 bash "$WIN_REPO/scripts/02-build-pmos-kernel-contrast.sh"
+        RAZER_MSS_DIAG_MANUAL=1 run_refresh_rootfs
+        bash "$WIN_REPO/scripts/04-make-boot-image.sh"
+        echo "pmos-mss-diag" > "$WIN_REPO/output/$RAZER_IMAGE_PROFILE/kernel.flavor"
+        mkdir -p "$RAZER_WORKDIR/output/$RAZER_IMAGE_PROFILE"
+        echo "pmos-mss-diag" > "$RAZER_WORKDIR/output/$RAZER_IMAGE_PROFILE/kernel.flavor"
         ;;
     rootfs)
         run_rootfs
@@ -123,7 +141,7 @@ case "$MODE" in
         bash "$WIN_REPO/scripts/04-make-boot-image.sh"
         ;;
     *)
-        echo "Usage: bash scripts/build-all.sh [all|kernel|rootfs|refresh-rootfs|validate|validate-boot|boot]"
+        echo "Usage: bash scripts/build-all.sh [all|kernel|pmos-kernel|pmos-contrast|pmos-mss-diag|rootfs|refresh-rootfs|validate|validate-boot|boot]"
         exit 2
         ;;
 esac

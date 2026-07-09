@@ -3,11 +3,11 @@
 # Razer Phone 2 (aura) - Existing Rootfs Refresher
 # ==========================================================================
 # Validation-phase updater for an existing rootfs.img. This intentionally does
-# not run debootstrap, apt, pip, git clone, or the Helix installer.
+# not run debootstrap, apt, pip, or git clone.
 #
 # Use this when changing kernel modules, firmware blobs, DTS-adjacent runtime
-# config, USB gadget config, or Helix/fbdev overrides. Use 03-build-rootfs.sh
-# only when the base Ubuntu package set or final userspace installer changes.
+# config, or USB gadget config. Use 03-build-rootfs.sh only when the base
+# Ubuntu package set changes.
 # ==========================================================================
 
 set -euo pipefail
@@ -22,10 +22,15 @@ fi
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$PROJECT_DIR/config/build.env"
-IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-printer}"
+IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-base}"
 case "$IMAGE_PROFILE" in
-    base|printer) ;;
-    *) echo "ERROR: RAZER_IMAGE_PROFILE must be base or printer."; exit 2 ;;
+    base) ;;
+    *) echo "ERROR: RAZER_IMAGE_PROFILE must be base."; exit 2 ;;
+esac
+USERSPACE_PROFILE="${RAZER_USERSPACE_PROFILE:-none}"
+case "$USERSPACE_PROFILE" in
+    none|ha|3dprinter) ;;
+    *) echo "ERROR: RAZER_USERSPACE_PROFILE must be none, ha, or 3dprinter."; exit 2 ;;
 esac
 OUTPUT_DIR="$WORKDIR/output/$IMAGE_PROFILE"
 WIN_OUTPUT_DIR="$PROJECT_DIR/output/$IMAGE_PROFILE"
@@ -68,6 +73,7 @@ echo " Razer Phone 2 - Rootfs Refresh"
 echo "========================================"
 echo "Rootfs image: $ROOTFS_IMG"
 echo "Image profile: $IMAGE_PROFILE"
+echo "Userspace:     $USERSPACE_PROFILE"
 echo "Workdir:      $WORKDIR"
 
 if [ "$EUID" -ne 0 ]; then
@@ -91,6 +97,17 @@ if [ ! -f "$ROOTFS_IMG" ]; then
     fi
 fi
 
+if [ -f "$OUTPUT_DIR/userspace.profile" ]; then
+    EXISTING_USERSPACE_PROFILE=$(tr -d '\r\n' < "$OUTPUT_DIR/userspace.profile")
+    if [ "$EXISTING_USERSPACE_PROFILE" != "$USERSPACE_PROFILE" ]; then
+        echo "ERROR: existing rootfs profile is '$EXISTING_USERSPACE_PROFILE' but refresh requested '$USERSPACE_PROFILE'."
+        echo "Run scripts/03-build-rootfs.sh, or build-all.sh all, when changing userspace profiles."
+        exit 1
+    fi
+else
+    echo "$USERSPACE_PROFILE" > "$OUTPUT_DIR/userspace.profile"
+fi
+
 cleanup_mounts
 mount -o loop "$ROOTFS_IMG" "$MOUNT_DIR"
 
@@ -104,6 +121,50 @@ install -D -m 0755 \
 install -D -m 0755 \
     "$PROJECT_DIR/rootfs-scripts/razer-wifi-ready.sh" \
     "$MOUNT_DIR/usr/local/sbin/razer-wifi-ready"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/initramfs-tools/razer-root.conf" \
+    "$MOUNT_DIR/etc/initramfs-tools/conf.d/razer-root"
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/initramfs-tools/razer-root-local-top" \
+    "$MOUNT_DIR/etc/initramfs-tools/scripts/local-top/razer-root"
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/initramfs-tools/razer-gpu-firmware" \
+    "$MOUNT_DIR/etc/initramfs-tools/hooks/razer-gpu-firmware"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-quiet-console.service" \
+    "$MOUNT_DIR/etc/systemd/system/razer-quiet-console.service"
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/razer-charge-limits.sh" \
+    "$MOUNT_DIR/usr/local/sbin/razer-charge-limits"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-charge-limits.service" \
+    "$MOUNT_DIR/etc/systemd/system/razer-charge-limits.service"
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/razer-panel-idle-blank.sh" \
+    "$MOUNT_DIR/usr/local/sbin/razer-panel-idle-blank"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-panel-idle-blank.service" \
+    "$MOUNT_DIR/etc/systemd/system/razer-panel-idle-blank.service"
+mkdir -p "$MOUNT_DIR/etc/systemd/system/basic.target.wants"
+ln -sf ../razer-quiet-console.service \
+    "$MOUNT_DIR/etc/systemd/system/basic.target.wants/razer-quiet-console.service"
+mkdir -p "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants"
+ln -sf ../razer-charge-limits.service \
+    "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/razer-charge-limits.service"
+ln -sf ../razer-panel-idle-blank.service \
+    "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/razer-panel-idle-blank.service"
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/razer-panel-colortest.py" \
+    "$MOUNT_DIR/usr/local/sbin/razer-panel-colortest"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-panel-colortest.service" \
+    "$MOUNT_DIR/etc/systemd/system/razer-panel-colortest.service"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-panel-autocolortest.service" \
+    "$MOUNT_DIR/etc/systemd/system/razer-panel-autocolortest.service"
+mkdir -p "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants"
+ln -sf ../razer-panel-autocolortest.service \
+    "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/razer-panel-autocolortest.service"
 if [ -f "$PROJECT_DIR/config/device.env" ]; then
     install -D -m 0600 \
         "$PROJECT_DIR/config/device.env" \
@@ -111,6 +172,12 @@ if [ -f "$PROJECT_DIR/config/device.env" ]; then
 fi
 
 echo "[1/5] Syncing firmware blobs and repo-controlled packages..."
+if [ ! -f "$FIRMWARE_DIR/qcom/sdm845/Razer/aura/mba.mbn" ] && [ "${RAZER_ALLOW_MISSING_FIRMWARE:-0}" != "1" ]; then
+    echo "ERROR: $FIRMWARE_DIR/qcom/sdm845/Razer/aura/mba.mbn is missing."
+    echo "firmware/ is gitignored; copy it from an existing checkout first, or"
+    echo "set RAZER_ALLOW_MISSING_FIRMWARE=1 to refresh a no-WiFi image."
+    exit 1
+fi
 if [ -d "$FIRMWARE_DIR" ] && [ "$(ls -A "$FIRMWARE_DIR" 2>/dev/null)" ]; then
     mkdir -p "$MOUNT_DIR/usr/lib/firmware"
     cp -a "$FIRMWARE_DIR"/. "$MOUNT_DIR/usr/lib/firmware/"
@@ -162,12 +229,34 @@ if [ -f "$KERNEL_RELEASE_FILE" ]; then
     MODULE_SRC="$OUTPUT_DIR/modules_install/lib/modules/$KERNEL_VERSION"
 
     if [ -d "$MODULE_SRC" ]; then
-        rm -rf "$MOUNT_DIR/lib/modules"
-        mkdir -p "$MOUNT_DIR/lib/modules"
         copy_tree "$MODULE_SRC" "$MOUNT_DIR/lib/modules/$KERNEL_VERSION"
         chroot "$MOUNT_DIR" depmod -a "$KERNEL_VERSION"
+        if ! chroot "$MOUNT_DIR" test -x /usr/sbin/update-initramfs; then
+            echo "ERROR: update-initramfs is missing in the rootfs."
+            echo "Run scripts/03-build-rootfs.sh once to rebuild the base image with initramfs-tools."
+            exit 1
+        fi
+        mkdir -p "$MOUNT_DIR/boot"
+        if [ -f "$OUTPUT_DIR/config-$KERNEL_VERSION" ]; then
+            cp -f "$OUTPUT_DIR/config-$KERNEL_VERSION" "$MOUNT_DIR/boot/config-$KERNEL_VERSION"
+        elif [ -f "$OUTPUT_DIR/kernel.config" ]; then
+            cp -f "$OUTPUT_DIR/kernel.config" "$MOUNT_DIR/boot/config-$KERNEL_VERSION"
+        fi
+        if chroot "$MOUNT_DIR" test -f "/boot/initrd.img-$KERNEL_VERSION"; then
+            chroot "$MOUNT_DIR" update-initramfs -u -k "$KERNEL_VERSION"
+        else
+            chroot "$MOUNT_DIR" update-initramfs -c -k "$KERNEL_VERSION"
+        fi
+        INITRD_SRC="$MOUNT_DIR/boot/initrd.img-$KERNEL_VERSION"
+        if [ ! -s "$INITRD_SRC" ]; then
+            echo "ERROR: initramfs was not generated at /boot/initrd.img-$KERNEL_VERSION"
+            exit 1
+        fi
+        cp -f "$INITRD_SRC" "$OUTPUT_DIR/initrd.img-$KERNEL_VERSION"
+        cp -f "$INITRD_SRC" "$OUTPUT_DIR/initrd.img"
         echo "$KERNEL_VERSION" > "$ROOTFS_RELEASE_FILE"
         echo "  Installed modules for $KERNEL_VERSION"
+        echo "  Generated initramfs-tools initrd for $KERNEL_VERSION"
     else
         echo "ERROR: modules for kernel release '$KERNEL_VERSION' are missing:"
         echo "  $MODULE_SRC"
@@ -181,7 +270,7 @@ echo "[4/5] Cleaning temporary files..."
 chroot "$MOUNT_DIR" bash -c "
     rm -f /tmp/apply-runtime-config.sh
     rm -rf /tmp/* /var/tmp/*
-    rm -rf /home/klipper/helixscreen.old /home/klipper/.cache/pip
+    rm -rf /home/klipper/.cache/pip
     rm -rf /var/cache/apt/archives/* /var/lib/apt/lists/*
     find /var/log -type f -exec truncate -s 0 {} +
 " || true
@@ -190,7 +279,11 @@ cleanup_mounts
 
 echo "[5/5] Compacting and regenerating sparse image..."
 if command -v e2fsck >/dev/null 2>&1; then
-    e2fsck -fy "$ROOTFS_IMG"
+    # e2fsck exits 1/2 when it corrected something; only >2 is a real error.
+    e2fsck -fy "$ROOTFS_IMG" || {
+        rc=$?
+        [ "$rc" -le 2 ] || { echo "ERROR: e2fsck failed with $rc"; exit 1; }
+    }
 fi
 if command -v zerofree >/dev/null 2>&1; then
     zerofree "$ROOTFS_IMG"
@@ -203,6 +296,11 @@ cp -f "$ROOTFS_IMG" "$WIN_ROOTFS_IMG"
 cp -f "$SPARSE_IMG" "$WIN_OUTPUT_DIR/rootfs-sparse.img"
 if [ -f "$ROOTFS_RELEASE_FILE" ]; then
     cp -f "$ROOTFS_RELEASE_FILE" "$WIN_OUTPUT_DIR/rootfs.kernel-release"
+fi
+cp -f "$OUTPUT_DIR/userspace.profile" "$WIN_OUTPUT_DIR/userspace.profile"
+if [ -n "${KERNEL_VERSION:-}" ] && [ -f "$OUTPUT_DIR/initrd.img-$KERNEL_VERSION" ]; then
+    cp -f "$OUTPUT_DIR/initrd.img-$KERNEL_VERSION" "$WIN_OUTPUT_DIR/initrd.img-$KERNEL_VERSION"
+    cp -f "$OUTPUT_DIR/initrd.img" "$WIN_OUTPUT_DIR/initrd.img"
 fi
 if [ -f "$KERNEL_RELEASE_FILE" ]; then
     cp -f "$KERNEL_RELEASE_FILE" "$WIN_OUTPUT_DIR/kernel.release"

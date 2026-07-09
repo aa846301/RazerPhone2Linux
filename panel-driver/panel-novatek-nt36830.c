@@ -44,6 +44,16 @@
 #define nt36830_dual_dcs_write_seq(dsi_ctx, dsi0, dsi1, cmd, seq...)           \
 	mipi_dsi_dual_dcs_write_seq_multi(&(dsi_ctx), dsi0, dsi1, cmd, seq)
 
+/*
+ * Diagnostic: select the DDIC clock-source init variant. true = factory
+ * extclk_cmd sequence (f6=0x71, DDIC uses external clock), false = plain
+ * cmd sequence (f6=0x70, DDIC internal clock). See the f6 write in
+ * nt36830_on(). Usage: panel_novatek_nt36830.use_extclk=0
+ */
+static bool use_extclk = true;
+module_param(use_extclk, bool, 0444);
+MODULE_PARM_DESC(use_extclk, "DDIC clock source: 1=external (factory extclk variant, default), 0=internal");
+
 struct nt36830_panel {
 	struct drm_panel panel;
 	struct mipi_dsi_device *dsi0;
@@ -144,7 +154,26 @@ static int nt36830_on(struct nt36830_panel *ctx)
 	nt36830_dual_dcs_write_seq(dsi_ctx, ctx->dsi0, ctx->dsi1, 0xe1, 0x00);
 	nt36830_dual_dcs_write_seq(dsi_ctx, ctx->dsi0, ctx->dsi1, 0xe5, 0x01);
 	nt36830_dual_dcs_write_seq(dsi_ctx, ctx->dsi0, ctx->dsi1, 0xbb, 0x10);
-	nt36830_dual_dcs_write_seq(dsi_ctx, ctx->dsi0, ctx->dsi1, 0xf6, 0x70);
+	/* 0x71 (not 0x70) per the factory extclk_cmd DTBO node actually used
+	 * on this board (qcom,mdss_dsi_nt36830_wqhd_dualdsi_extclk_cmd);
+	 * 0x70 belongs to the plain (non-extclk) cmd variant. This f6 byte is
+	 * the ONLY byte differing between the two variants' entire init
+	 * sequences (verified against both generated references). The factory
+	 * extclk display node also requires exclk-supply = pm8998_l6, which
+	 * mainline never registers/enables -- so 0x71 tells the DDIC to use an
+	 * external clock whose power rail Linux does not manage. The extclk=0
+	 * parameter selects the internal-clock variant (0x70) for the DSI0
+	 * left-half stripe investigation.
+	 */
+	{
+		/* Not the _seq macro: that packs its bytes into a static
+		 * const initializer, which cannot hold the runtime switch. */
+		const u8 f6_cmd[] = { 0xf6, use_extclk ? 0x71 : 0x70 };
+
+		mipi_dsi_dual_dcs_write_buffer_multi(&dsi_ctx, ctx->dsi0,
+						     ctx->dsi1, f6_cmd,
+						     sizeof(f6_cmd));
+	}
 	nt36830_dual_dcs_write_seq(dsi_ctx, ctx->dsi0, ctx->dsi1, 0xf7, 0x80);
 	nt36830_dual_dcs_write_seq(dsi_ctx, ctx->dsi0, ctx->dsi1, 0xbe,
 				   0x00, 0x10, 0x00, 0x10);
@@ -388,6 +417,12 @@ static int nt36830_off(struct nt36830_panel *ctx)
 {
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi0 };
 
+	/* Factory: qcom,mdss-dsi-off-command-state = "dsi_lp_mode" (the
+	 * on-command sequence is HS; only this off sequence goes LP). */
+	ctx->dsi0->mode_flags |= MIPI_DSI_MODE_LPM;
+	if (ctx->dsi1)
+		ctx->dsi1->mode_flags |= MIPI_DSI_MODE_LPM;
+
 	/* Page 10 */
 	nt36830_dual_dcs_write_seq(dsi_ctx, ctx->dsi0, ctx->dsi1, 0xff, 0x10);
 	nt36830_dual_dcs_write_seq(dsi_ctx, ctx->dsi0, ctx->dsi1, 0xfb, 0x01);
@@ -410,6 +445,11 @@ static int nt36830_off(struct nt36830_panel *ctx)
 		mipi_dsi_dcs_enter_sleep_mode_multi(&dsi_ctx);
 	}
 	mipi_dsi_msleep(&dsi_ctx, 180);
+
+	/* Back to HS for the next on-sequence (factory on-command state). */
+	ctx->dsi0->mode_flags &= ~MIPI_DSI_MODE_LPM;
+	if (ctx->dsi1)
+		ctx->dsi1->mode_flags &= ~MIPI_DSI_MODE_LPM;
 
 	return dsi_ctx.accum_err;
 }
@@ -466,6 +506,19 @@ static int nt36830_unprepare(struct drm_panel *panel)
  *
  * Physical size: 71mm x 126mm (from DTS).
  */
+/*
+ * Diagnostic knob for the DSI0 left-half stripe investigation: overriding
+ * the preferred mode's pixel clock scales the DSI link bitrate with it
+ * (cmd-mode panel writes to GRAM asynchronously, and the factory DTS ships
+ * 30/48Hz variants of this same panel, so lower link rates are in-spec).
+ * If stripes vanish at half rate the fault is link margin (ISI); if they
+ * are unchanged the fault is logic (DDIC decoder / init sequence).
+ * Usage: panel_novatek_nt36830.mode_clock_khz=118195  (30Hz, half rate)
+ */
+static unsigned int mode_clock_khz;
+module_param(mode_clock_khz, uint, 0444);
+MODULE_PARM_DESC(mode_clock_khz, "Override preferred mode pixel clock (kHz); 0 = default 236390 (60Hz)");
+
 static const struct drm_display_mode nt36830_modes[] = {
 	{
 		.clock = 236390,
@@ -508,8 +561,15 @@ static int nt36830_get_modes(struct drm_panel *panel,
 			return -ENOMEM;
 
 		mode->type = DRM_MODE_TYPE_DRIVER;
-		if (i == 0)
+		if (i == 0) {
 			mode->type |= DRM_MODE_TYPE_PREFERRED;
+			if (mode_clock_khz) {
+				mode->clock = mode_clock_khz;
+				dev_info(panel->dev,
+					 "mode_clock_khz override: %u kHz\n",
+					 mode_clock_khz);
+			}
+		}
 
 		drm_mode_set_name(mode);
 		drm_mode_probed_add(connector, mode);
@@ -698,8 +758,15 @@ static int nt36830_probe(struct mipi_dsi_device *dsi)
 
 	dsi->lanes = 4;
 	dsi->format = MIPI_DSI_FMT_RGB888;
-	dsi->mode_flags = MIPI_DSI_MODE_LPM |
-			  MIPI_DSI_CLOCK_NON_CONTINUOUS;
+	/*
+	 * No MIPI_DSI_MODE_LPM here: the factory DTS sends the on-command
+	 * sequence in HS (qcom,mdss-dsi-on-command-state = "dsi_hs_mode");
+	 * only the off-command sequence is LP ("dsi_lp_mode"), which
+	 * nt36830_off() arranges by toggling LPM around it (same pattern as
+	 * panel-novatek-nt35950.c, with the HS/LP roles inverted per this
+	 * panel's factory command-state properties).
+	 */
+	dsi->mode_flags = MIPI_DSI_CLOCK_NON_CONTINUOUS;
 
 	/* Configure secondary DSI */
 	if (ctx->dsi1) {

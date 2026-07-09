@@ -3,7 +3,7 @@
 # Razer Phone 2 (aura) - Ubuntu Noble ARM64 Rootfs Builder
 # ==========================================================================
 # Creates an Ubuntu 24.04 (Noble) ARM64 root filesystem image configured
-# for the Razer Phone 2 running mainline Linux with KlipperScreen.
+# for the Razer Phone 2 running mainline Linux (Home Assistant hub target).
 #
 # Usage: sudo bash 03-build-rootfs.sh
 # Must be run as root (sudo) for debootstrap and chroot operations.
@@ -24,10 +24,15 @@ else
 fi
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$PROJECT_DIR/config/build.env"
-IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-printer}"
+IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-base}"
 case "$IMAGE_PROFILE" in
-    base|printer) ;;
-    *) echo "ERROR: RAZER_IMAGE_PROFILE must be base or printer."; exit 2 ;;
+    base) ;;
+    *) echo "ERROR: RAZER_IMAGE_PROFILE must be base."; exit 2 ;;
+esac
+USERSPACE_PROFILE="${RAZER_USERSPACE_PROFILE:-none}"
+case "$USERSPACE_PROFILE" in
+    none|ha|3dprinter) ;;
+    *) echo "ERROR: RAZER_USERSPACE_PROFILE must be none, ha, or 3dprinter."; exit 2 ;;
 esac
 OUTPUT_DIR="$WORKDIR/output/$IMAGE_PROFILE"
 ROOTFS_DIR="$WORKDIR/rootfs"
@@ -76,7 +81,7 @@ HOSTNAME="razer-aura"
 USERNAME="klipper"
 # Default password - CHANGE THIS after first boot!
 USER_PASSWORD="klipper"
-if [ "$IMAGE_PROFILE" = "printer" ]; then
+if [ "$USERSPACE_PROFILE" = "3dprinter" ]; then
     ROOTFS_SIZE_GB=6
 else
     ROOTFS_SIZE_GB=4
@@ -91,6 +96,7 @@ echo " Razer Phone 2 - Rootfs Builder"
 echo "========================================"
 echo "Distribution: Ubuntu Noble 24.04 ARM64"
 echo "Profile:      $IMAGE_PROFILE"
+echo "Userspace:    $USERSPACE_PROFILE"
 echo "APT mirror:   $MIRROR"
 echo "Kernel:       $KERNEL_VERSION"
 echo "Image size:   ${ROOTFS_SIZE_GB}GB"
@@ -167,6 +173,50 @@ fi
 install -D -m 0755 \
     "$PROJECT_DIR/rootfs-scripts/razer-wifi-ready.sh" \
     "$CHROOT_DIR/usr/local/sbin/razer-wifi-ready"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/initramfs-tools/razer-root.conf" \
+    "$CHROOT_DIR/etc/initramfs-tools/conf.d/razer-root"
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/initramfs-tools/razer-root-local-top" \
+    "$CHROOT_DIR/etc/initramfs-tools/scripts/local-top/razer-root"
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/initramfs-tools/razer-gpu-firmware" \
+    "$CHROOT_DIR/etc/initramfs-tools/hooks/razer-gpu-firmware"
+# Panel bring-up color test: tool + units ship in the image, but the
+# on-every-boot autocolortest is only auto-enabled by the debug refresh
+# path (03-refresh-rootfs.sh), not in a from-scratch production build.
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/razer-panel-colortest.py" \
+    "$CHROOT_DIR/usr/local/sbin/razer-panel-colortest"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-panel-colortest.service" \
+    "$CHROOT_DIR/etc/systemd/system/razer-panel-colortest.service"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-panel-autocolortest.service" \
+    "$CHROOT_DIR/etc/systemd/system/razer-panel-autocolortest.service"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-quiet-console.service" \
+    "$CHROOT_DIR/etc/systemd/system/razer-quiet-console.service"
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/razer-charge-limits.sh" \
+    "$CHROOT_DIR/usr/local/sbin/razer-charge-limits"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-charge-limits.service" \
+    "$CHROOT_DIR/etc/systemd/system/razer-charge-limits.service"
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/razer-panel-idle-blank.sh" \
+    "$CHROOT_DIR/usr/local/sbin/razer-panel-idle-blank"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-panel-idle-blank.service" \
+    "$CHROOT_DIR/etc/systemd/system/razer-panel-idle-blank.service"
+mkdir -p "$CHROOT_DIR/etc/systemd/system/basic.target.wants"
+ln -sf ../razer-quiet-console.service \
+    "$CHROOT_DIR/etc/systemd/system/basic.target.wants/razer-quiet-console.service"
+mkdir -p "$CHROOT_DIR/etc/systemd/system/multi-user.target.wants"
+ln -sf ../razer-charge-limits.service \
+    "$CHROOT_DIR/etc/systemd/system/multi-user.target.wants/razer-charge-limits.service"
+ln -sf ../razer-panel-idle-blank.service \
+    "$CHROOT_DIR/etc/systemd/system/multi-user.target.wants/razer-panel-idle-blank.service"
 if [ -f "$ROOTFS_PACKAGES_DIR/tqftpserv_1.0-5_arm64.deb" ]; then
     cp -f "$ROOTFS_PACKAGES_DIR/tqftpserv_1.0-5_arm64.deb" \
         "$CHROOT_DIR/tmp/tqftpserv_1.0-5_arm64.deb"
@@ -261,7 +311,8 @@ apt install -y \
     evtest \
     htop \
     ca-certificates \
-    gnupg
+    gnupg \
+    python3
 
 # Install repo-controlled ARM64 packages that are not consistently available
 # from the enabled Ubuntu package set during cached validation builds.
@@ -369,7 +420,7 @@ GADGET_DROPIN_EOF
 cat > /etc/modules-load.d/razer-aura.conf << 'MODULES_EOF'
 # Razer Phone 2 kernel modules
 # Keep MDSS/DSI/MSM DRM out of the default path. The practical display path is
-# bootloader framebuffer -> simpledrm/fbdev -> HelixScreen.
+# bootloader framebuffer -> simpledrm/fbdev (native NT36830 panel comes later).
 # WiFi
 qcom_sysmon
 qcom_q6v5_mss
@@ -417,8 +468,6 @@ fi
 # Step 6: Install kernel modules
 # -------------------------------------------------------
 echo "[6/10] Installing kernel modules (version $KERNEL_VERSION)..."
-rm -rf "$CHROOT_DIR/lib/modules"
-mkdir -p "$CHROOT_DIR/lib/modules"
 rsync -av --progress \
     "$OUTPUT_DIR/modules_install/lib/modules/$KERNEL_VERSION" \
     "$CHROOT_DIR/lib/modules/"
@@ -434,6 +483,12 @@ echo "  Kernel modules installed."
 # -------------------------------------------------------
 echo "[6b/10] Generating Ubuntu initramfs..."
 
+mkdir -p "$CHROOT_DIR/boot"
+if [ -f "$OUTPUT_DIR/config-$KERNEL_VERSION" ]; then
+    cp -f "$OUTPUT_DIR/config-$KERNEL_VERSION" "$CHROOT_DIR/boot/config-$KERNEL_VERSION"
+elif [ -f "$OUTPUT_DIR/kernel.config" ]; then
+    cp -f "$OUTPUT_DIR/kernel.config" "$CHROOT_DIR/boot/config-$KERNEL_VERSION"
+fi
 chroot "$CHROOT_DIR" update-initramfs -c -k "$KERNEL_VERSION"
 
 INITRD_SRC="$CHROOT_DIR/boot/initrd.img-$KERNEL_VERSION"
@@ -452,14 +507,23 @@ echo "  Initramfs copied to $OUTPUT_DIR/initrd.img-$KERNEL_VERSION"
 echo "[7/10] Installing firmware blobs..."
 
 # 7a: Proprietary blobs (adsp, cdsp, gpu zap, venus) from stock ROM.
-if [ -d "$FIRMWARE_DIR" ] && [ "$(ls -A "$FIRMWARE_DIR" 2>/dev/null)" ]; then
+# firmware/** is gitignored, so a fresh checkout/worktree only contains
+# README.md. Checking "directory non-empty" is therefore not enough: require
+# the Razer modem loader explicitly, or the image silently ships without
+# WiFi/ADSP/CDSP (seen 2026-07-02).
+if [ -f "$FIRMWARE_DIR/qcom/sdm845/Razer/aura/mba.mbn" ]; then
     mkdir -p "$CHROOT_DIR/usr/lib/firmware"
     cp -rv "$FIRMWARE_DIR"/* "$CHROOT_DIR/usr/lib/firmware/"
     echo "  Proprietary firmware installed."
+elif [ "${RAZER_ALLOW_MISSING_FIRMWARE:-0}" = "1" ]; then
+    echo "  WARNING: proprietary firmware missing; building anyway"
+    echo "  (RAZER_ALLOW_MISSING_FIRMWARE=1). WiFi/ADSP/CDSP will not work."
 else
-    echo "  NOTE: $FIRMWARE_DIR is empty."
-    echo "  WiFi (ath10k), GPU (a630_zap), ADSP, CDSP will not work until"
-    echo "  you run scripts/extract-modem-firmware.sh and rebuild rootfs."
+    echo "ERROR: $FIRMWARE_DIR/qcom/sdm845/Razer/aura/mba.mbn is missing."
+    echo "firmware/ is gitignored; copy it from an existing checkout or run"
+    echo "scripts/extract-modem-firmware.sh. Set RAZER_ALLOW_MISSING_FIRMWARE=1"
+    echo "to build a no-WiFi image deliberately."
+    exit 1
 fi
 
 # 7b: WCN3990 WiFi firmware from linux-firmware (open-source, no ROM needed).
@@ -493,28 +557,25 @@ else
 fi
 
 # -------------------------------------------------------
-# Step 8/9: Install final target userspace
+# Step 8/9: Optional final target userspace
 # -------------------------------------------------------
-if [ "$IMAGE_PROFILE" = "printer" ]; then
-    echo "[8/10] Installing Klipper + Moonraker + HelixScreen..."
-    cp -f "$PROJECT_DIR/rootfs-scripts/install-final-target.sh" "$CHROOT_DIR/tmp/install-final-target.sh"
-    cp -f "$PROJECT_DIR/config/userspace.env" "$CHROOT_DIR/tmp/userspace.env"
-    chmod +x "$CHROOT_DIR/tmp/install-final-target.sh"
-    chroot "$CHROOT_DIR" /usr/bin/env \
-        PIP_INDEX_URL=https://pypi.org/simple \
-        PIP_CACHE_DIR=/var/cache/razer-pip \
-        /tmp/install-final-target.sh
-    chroot "$CHROOT_DIR" /bin/sh -c \
-        'pkill -x helix-watchdog 2>/dev/null || true; pkill -x helix-screen 2>/dev/null || true; pkill -x helix-splash 2>/dev/null || true'
-    echo "  Printer userspace installed."
+echo "[8/10] Applying userspace profile: $USERSPACE_PROFILE"
+echo "$USERSPACE_PROFILE" > "$OUTPUT_DIR/userspace.profile"
+if [ "$USERSPACE_PROFILE" = "none" ]; then
+    echo "  Base image selected; no app stack will be preinstalled."
 else
-    echo "[8/10] Base profile selected; skipping Klipper/Moonraker/HelixScreen."
+    PROFILE_INSTALLER="$PROJECT_DIR/rootfs-profiles/$USERSPACE_PROFILE/install.sh"
+    if [ ! -f "$PROFILE_INSTALLER" ]; then
+        echo "ERROR: userspace profile installer is missing: $PROFILE_INSTALLER"
+        exit 1
+    fi
+    CHROOT_DIR="$CHROOT_DIR" PROJECT_DIR="$PROJECT_DIR" \
+        bash "$PROFILE_INSTALLER"
 fi
 
 # Keep the full build and validation refresh on the same runtime overlay path.
-# This must run after firmware and final userspace are installed so it can
-# create firmware aliases, enable tqftpserv, and install HelixScreen drop-ins
-# on the first reproducible build.
+# This must run after firmware is installed so it can create firmware aliases
+# and enable tqftpserv on the first reproducible build.
 echo "[9/10] Applying runtime config overlay..."
 cp -f "$PROJECT_DIR/rootfs-scripts/apply-runtime-config.sh" "$CHROOT_DIR/tmp/apply-runtime-config.sh"
 chmod +x "$CHROOT_DIR/tmp/apply-runtime-config.sh"
@@ -529,7 +590,7 @@ echo "[10/10] Cleaning up and creating sparse image..."
 # is a host-side bind mount used to speed up future full rootfs builds.
 chroot "$CHROOT_DIR" bash -c "
     rm -rf /tmp/* /var/tmp/*
-    rm -rf /home/klipper/helixscreen.old /home/klipper/.cache/pip
+    rm -rf /home/klipper/.cache/pip
     rm -rf /var/lib/apt/lists/*
     find /var/log -type f -exec truncate -s 0 {} +
 "
@@ -566,6 +627,9 @@ mkdir -p "$WIN_OUTPUT_DIR"
 cp -f "$OUTPUT_ROOTFS_IMG" "$WIN_OUTPUT_DIR/rootfs.img"
 cp -f "$SPARSE_IMG" "$WIN_OUTPUT_DIR/rootfs-sparse.img"
 cp -f "$OUTPUT_DIR/rootfs.kernel-release" "$WIN_OUTPUT_DIR/rootfs.kernel-release"
+cp -f "$OUTPUT_DIR/userspace.profile" "$WIN_OUTPUT_DIR/userspace.profile"
+cp -f "$OUTPUT_DIR/initrd.img-$KERNEL_VERSION" "$WIN_OUTPUT_DIR/initrd.img-$KERNEL_VERSION"
+cp -f "$OUTPUT_DIR/initrd.img" "$WIN_OUTPUT_DIR/initrd.img"
 if [ -f "$KERNEL_RELEASE_FILE" ]; then
     cp -f "$KERNEL_RELEASE_FILE" "$WIN_OUTPUT_DIR/kernel.release"
 fi
@@ -585,10 +649,8 @@ echo "  Root:     root / $USER_PASSWORD"
 echo "  Hostname: $HOSTNAME"
 echo "  SSH:      enabled"
 echo "  WiFi:     use 'nmtui' or 'nmcli' after boot"
+echo "  Userspace profile: $USERSPACE_PROFILE"
 echo ""
-echo "  Klipper:       klipper.service enabled"
-echo "  Moonraker:     moonraker.service enabled on port 7125"
-echo "  HelixScreen:   helixscreen.service enabled with fbdev backend"
 echo "  Serial debug:  ttyMSM0 (UART) and ttyGS0 (USB gadget)"
 echo ""
 echo "IMPORTANT: Change passwords after first boot!"

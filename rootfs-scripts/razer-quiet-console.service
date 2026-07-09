@@ -1,0 +1,20 @@
+[Unit]
+Description=Silence kernel console output on the panel once rootfs is up
+Documentation=file:/usr/share/doc/razerphone2linux/initramfs-decision-2026-07-02.md
+# Boot policy: kernel + initramfs logs are shown on the panel (console=tty0,
+# no quiet). Once systemd is running the screen goes quiet; messages stay in
+# dmesg/journal. Only active when the boot image opts in via cmdline, so
+# DISPLAY_MODE=console debug boots keep full output on screen.
+ConditionKernelCommandLine=razer_quiet_console
+DefaultDependencies=no
+After=sysinit.target
+Before=basic.target
+
+[Service]
+Type=oneshot
+# Keep alert/emergency messages visible; everything else leaves the panel.
+ExecStart=/usr/bin/dmesg --console-level crit
+RemainAfterExit=yes
+
+[Install]
+WantedBy=basic.target

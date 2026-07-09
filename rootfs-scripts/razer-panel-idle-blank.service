@@ -1,0 +1,12 @@
+[Unit]
+Description=Blank the panel on the app-free base image
+After=multi-user.target
+ConditionKernelCommandLine=razer_panel_idle_blank
+
+[Service]
+Type=oneshot
+Environment=RAZER_PANEL_IDLE_SECONDS=60
+ExecStart=/usr/local/sbin/razer-panel-idle-blank
+
+[Install]
+WantedBy=multi-user.target
