@@ -37,3 +37,10 @@ and `.*`. On Windows, those rules can hide real snapshot sources like `.S`
 assembly files, linker scripts, and dotfiles from the parent repository. Commit
 the full snapshot with `git add -f kernel-source/linux` and verify there are no
 ignored untracked files left under `kernel-source/linux`.
+
+The snapshot must also preserve Git symlink entries. If a symlink is committed
+as a regular file containing its target path, Linux builds may read that text as
+input instead of following the link. One known build-critical example is
+`arch/arm64/tools/syscall_64.tbl`, which must link to
+`../../../scripts/syscall.tbl` so `unistd_64.h` contains the arm64 syscall
+numbers.
