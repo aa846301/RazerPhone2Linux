@@ -44,16 +44,6 @@ else
         u-boot-tools \
         kmod p7zip-full zerofree
 
-    # Install mkbootimg (Android boot image tool)
-    if ! command -v mkbootimg &>/dev/null; then
-        echo "Installing mkbootimg..."
-        sudo apt install -y mkbootimg 2>/dev/null || {
-            echo "mkbootimg not in apt, installing via pip..."
-            pip3 install --break-system-packages mkbootimg 2>/dev/null || \
-            pip3 install mkbootimg
-        }
-    fi
-
     # Install adb/fastboot
     if ! command -v fastboot &>/dev/null; then
         echo "Installing android-tools for fastboot/adb..."
@@ -67,13 +57,18 @@ else
 fi
 
 for required in aarch64-linux-gnu-gcc git dtc debootstrap qemu-aarch64-static \
-        rsync cpio img2simg mkbootimg 7z zerofree; do
+        rsync cpio img2simg python3 7z zerofree; do
     if ! command -v "$required" >/dev/null 2>&1; then
         echo "ERROR: required tool is missing: $required" >&2
         echo "Rerun without RAZER_SKIP_APT=1 after sudo access is available." >&2
         exit 1
     fi
 done
+
+if [ ! -f "$PROJECT_DIR/tools/mkbootimg.py" ]; then
+    echo "ERROR: project mkbootimg tool is missing: $PROJECT_DIR/tools/mkbootimg.py" >&2
+    exit 1
+fi
 
 # -------------------------------------------------------
 # Step 2: Create directory structure

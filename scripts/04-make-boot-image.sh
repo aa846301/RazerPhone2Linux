@@ -32,6 +32,7 @@ esac
 OUTPUT_DIR="$WORKDIR/output/$IMAGE_PROFILE"
 BOOT_IMG="$OUTPUT_DIR/boot.img"
 WIN_OUTPUT_DIR="$PROJECT_DIR/output/$IMAGE_PROFILE"
+PROJECT_MKBOOTIMG="$PROJECT_DIR/tools/mkbootimg.py"
 LOCAL_MKBOOTIMG="$WORKDIR/mkbootimg-tool/mkbootimg.py"
 KERNEL_RELEASE_FILE="$OUTPUT_DIR/kernel.release"
 ROOTFS_RELEASE_FILE="$OUTPUT_DIR/rootfs.kernel-release"
@@ -58,12 +59,14 @@ echo "Display mode: $DISPLAY_MODE"
 echo "Image profile: $IMAGE_PROFILE"
 echo "Userspace profile: $USERSPACE_PROFILE"
 
-if [ -f "$LOCAL_MKBOOTIMG" ]; then
+if [ -f "$PROJECT_MKBOOTIMG" ]; then
+    MKBOOTIMG_CMD=(python3 "$PROJECT_MKBOOTIMG")
+elif [ -f "$LOCAL_MKBOOTIMG" ]; then
     MKBOOTIMG_CMD=(python3 "$LOCAL_MKBOOTIMG")
 elif command -v mkbootimg &>/dev/null; then
     MKBOOTIMG_CMD=(mkbootimg)
 else
-    echo "ERROR: mkbootimg tool not found. Expected $LOCAL_MKBOOTIMG or mkbootimg in PATH."
+    echo "ERROR: mkbootimg tool not found. Expected $PROJECT_MKBOOTIMG, $LOCAL_MKBOOTIMG, or mkbootimg in PATH."
     exit 1
 fi
 
