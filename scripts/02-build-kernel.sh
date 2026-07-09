@@ -19,9 +19,14 @@ PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$PROJECT_DIR/config/kernel-source.env"
 source "$PROJECT_DIR/config/build.env"
 IMAGE_PROFILE="${RAZER_IMAGE_PROFILE:-printer}"
+KERNEL_SCOPE="${RAZER_KERNEL_SCOPE:-full}"
 case "$IMAGE_PROFILE" in
     base|printer) ;;
     *) echo "ERROR: RAZER_IMAGE_PROFILE must be base or printer."; exit 2 ;;
+esac
+case "$KERNEL_SCOPE" in
+    full|display) ;;
+    *) echo "ERROR: RAZER_KERNEL_SCOPE must be full or display."; exit 2 ;;
 esac
 OUTPUT_DIR="$WORKDIR/output/$IMAGE_PROFILE"
 WIN_OUTPUT_DIR="$PROJECT_DIR/output/$IMAGE_PROFILE"
@@ -34,7 +39,13 @@ export CROSS_COMPILE=aarch64-linux-gnu-
 # commit that is intentionally not an upstream annotated release tag.
 export LOCALVERSION=""
 
-MAX_JOBS=4
+MAX_JOBS="${RAZER_BUILD_JOBS:-4}"
+case "$MAX_JOBS" in
+    ''|*[!0-9]*|0)
+        echo "ERROR: RAZER_BUILD_JOBS must be a positive integer."
+        exit 2
+        ;;
+esac
 NPROC=$(nproc)
 if [ "$NPROC" -gt "$MAX_JOBS" ]; then
     BUILD_JOBS="$MAX_JOBS"
@@ -47,6 +58,7 @@ echo " Razer Phone 2 - Kernel Build"
 echo "========================================"
 echo "Kernel dir: $KERNEL_DIR"
 echo "Image profile: $IMAGE_PROFILE"
+echo "Build scope: $KERNEL_SCOPE"
 echo "Parallel jobs: $BUILD_JOBS"
 echo ""
 
@@ -84,12 +96,15 @@ fi
 echo "[1/6] Installing device tree and panel driver..."
 
 # Copy DTS
-cp -v "$PROJECT_DIR/dts/sdm845-razer-aura.dts" \
+install -v -m 0644 "$PROJECT_DIR/dts/sdm845-razer-aura.dts" \
     "$KERNEL_DIR/arch/arm64/boot/dts/qcom/sdm845-razer-aura.dts"
 
 # Copy panel driver
-cp -v "$PROJECT_DIR/panel-driver/panel-novatek-nt36830.c" \
+install -v -m 0644 "$PROJECT_DIR/panel-driver/panel-novatek-nt36830.c" \
     "$KERNEL_DIR/drivers/gpu/drm/panel/panel-novatek-nt36830.c"
+
+install -v -m 0644 "$PROJECT_DIR/panel-driver/novatek,nt36830.yaml" \
+    "$KERNEL_DIR/Documentation/devicetree/bindings/display/panel/novatek,nt36830.yaml"
 
 # -------------------------------------------------------
 # Step 2: Patch DTS Makefile to include our device tree
@@ -180,7 +195,8 @@ fi
 # obvious exactly what was built.
 if [ -n "$(git -C "$KERNEL_DIR" status --porcelain)" ]; then
     if [ -z "$(git -C "$KERNEL_DIR" branch --show-current)" ]; then
-        git -C "$KERNEL_DIR" switch -c razerphone2linux/integration
+        integration_branch="razerphone2linux/integration-${KERNEL_COMMIT:0:12}"
+        git -C "$KERNEL_DIR" switch -C "$integration_branch"
     fi
     git -C "$KERNEL_DIR" add -A
     git -C "$KERNEL_DIR" \
@@ -211,7 +227,21 @@ else
     exit 1
 fi
 
-# Apply the single canonical config fragment.
+# The SDM845 tree ships two maintained fragments on top of arm64 defconfig.
+# Apply them before the project fragments; using defconfig alone is not the
+# configuration tested by sdm845-mainline.
+for upstream_fragment in \
+    arch/arm64/configs/sdm845.config \
+    arch/arm64/configs/misc.config; do
+    if [ ! -f "$upstream_fragment" ]; then
+        echo "ERROR: missing SDM845 upstream config fragment: $upstream_fragment"
+        exit 1
+    fi
+    echo "Applying SDM845 upstream config fragment: $upstream_fragment"
+    ./scripts/kconfig/merge_config.sh -m .config "$upstream_fragment"
+done
+
+# Apply the canonical Razer config fragment.
 CONFIG_FRAGMENT="$PROJECT_DIR/config/razer-aura.config"
 if [ ! -f "$CONFIG_FRAGMENT" ]; then
     echo "ERROR: missing canonical config fragment: $CONFIG_FRAGMENT"
@@ -281,12 +311,21 @@ echo "[4/6] Kernel configured."
 # Step 5: Build kernel, DTBs, and modules
 # -------------------------------------------------------
 echo "[5/6] Building kernel (this will take a while)..."
-if ! make -j"$BUILD_JOBS" Image.gz dtbs modules 2>&1 | tee "$OUTPUT_DIR/build.log"; then
+if [ "$KERNEL_SCOPE" = "display" ]; then
+    BUILD_TARGETS=(Image.gz dtbs)
+else
+    BUILD_TARGETS=(Image.gz dtbs modules)
+fi
+
+if ! make -j"$BUILD_JOBS" "${BUILD_TARGETS[@]}" 2>&1 | tee "$OUTPUT_DIR/build.log"; then
     echo '' | tee -a "$OUTPUT_DIR/build.log"
     echo 'Parallel build failed under WSL, retrying with -j1 for a stable artifact...' | tee -a "$OUTPUT_DIR/build.log"
     make olddefconfig 2>&1 | tee -a "$OUTPUT_DIR/build.log"
-    make prepare modules_prepare 2>&1 | tee -a "$OUTPUT_DIR/build.log"
-    make -j1 Image.gz dtbs modules 2>&1 | tee -a "$OUTPUT_DIR/build.log"
+    make prepare 2>&1 | tee -a "$OUTPUT_DIR/build.log"
+    if [ "$KERNEL_SCOPE" = "full" ]; then
+        make modules_prepare 2>&1 | tee -a "$OUTPUT_DIR/build.log"
+    fi
+    make -j1 "${BUILD_TARGETS[@]}" 2>&1 | tee -a "$OUTPUT_DIR/build.log"
 fi
 
 echo "[5/6] Build complete."
@@ -296,25 +335,32 @@ echo "[5/6] Build complete."
 # -------------------------------------------------------
 echo "[6/6] Collecting build outputs..."
 
-# Install modules to output directory
-rm -rf "$OUTPUT_DIR/modules_install"
-make INSTALL_MOD_PATH="$OUTPUT_DIR/modules_install" modules_install
-
 KERNEL_RELEASE=$(make -s kernelrelease)
-echo "$KERNEL_RELEASE" > "$OUTPUT_DIR/kernel.release"
-for module_path in \
-    "kernel/drivers/net/wireless/ath/ath10k/ath10k_core.ko" \
-    "kernel/drivers/net/wireless/ath/ath10k/ath10k_snoc.ko" \
-    "kernel/drivers/remoteproc/qcom_q6v5.ko" \
-    "kernel/drivers/remoteproc/qcom_q6v5_mss.ko" \
-    "kernel/drivers/remoteproc/qcom_q6v5_pas.ko" \
-    "kernel/drivers/remoteproc/qcom_wcnss_pil.ko" \
-    "kernel/drivers/net/ipa/ipa.ko"; do
-    if [ ! -f "$OUTPUT_DIR/modules_install/lib/modules/$KERNEL_RELEASE/$module_path" ]; then
-        echo "ERROR: expected SDM845 Wi-Fi/MSS module missing after modules_install: $module_path"
-        exit 1
-    fi
-done
+if [ "$KERNEL_SCOPE" = "full" ]; then
+    rm -rf "$OUTPUT_DIR/modules_install"
+    make INSTALL_MOD_PATH="$OUTPUT_DIR/modules_install" modules_install
+    echo "$KERNEL_RELEASE" > "$OUTPUT_DIR/kernel.release"
+    rm -f "$OUTPUT_DIR/display.kernel-release"
+
+    for module_path in \
+        "kernel/drivers/net/wireless/ath/ath10k/ath10k_core.ko" \
+        "kernel/drivers/net/wireless/ath/ath10k/ath10k_snoc.ko" \
+        "kernel/drivers/remoteproc/qcom_q6v5.ko" \
+        "kernel/drivers/remoteproc/qcom_q6v5_mss.ko" \
+        "kernel/drivers/remoteproc/qcom_q6v5_pas.ko" \
+        "kernel/drivers/remoteproc/qcom_wcnss_pil.ko" \
+        "kernel/drivers/net/ipa/ipa.ko"; do
+        installed_module="$OUTPUT_DIR/modules_install/lib/modules/$KERNEL_RELEASE/$module_path"
+        if [ ! -f "$installed_module" ] && [ ! -f "$installed_module.zst" ]; then
+            echo "ERROR: expected SDM845 Wi-Fi/MSS module missing after modules_install: $module_path"
+            exit 1
+        fi
+    done
+else
+    rm -rf "$OUTPUT_DIR/modules_install"
+    rm -f "$OUTPUT_DIR/kernel.release"
+    echo "$KERNEL_RELEASE" > "$OUTPUT_DIR/display.kernel-release"
+fi
 
 # Copy kernel image
 cp -v arch/arm64/boot/Image.gz "$OUTPUT_DIR/Image.gz"
@@ -341,7 +387,13 @@ copy_aux_output() {
 copy_aux_output "$OUTPUT_DIR/Image.gz" "$WIN_OUTPUT_DIR/Image.gz"
 copy_aux_output "$OUTPUT_DIR/sdm845-razer-aura.dtb" "$WIN_OUTPUT_DIR/sdm845-razer-aura.dtb"
 copy_aux_output "$OUTPUT_DIR/Image.gz-dtb" "$WIN_OUTPUT_DIR/Image.gz-dtb"
-copy_aux_output "$OUTPUT_DIR/kernel.release" "$WIN_OUTPUT_DIR/kernel.release"
+if [ "$KERNEL_SCOPE" = "full" ]; then
+    copy_aux_output "$OUTPUT_DIR/kernel.release" "$WIN_OUTPUT_DIR/kernel.release"
+    rm -f "$WIN_OUTPUT_DIR/display.kernel-release"
+else
+    copy_aux_output "$OUTPUT_DIR/display.kernel-release" "$WIN_OUTPUT_DIR/display.kernel-release"
+    rm -f "$WIN_OUTPUT_DIR/kernel.release"
+fi
 echo "mainline" > "$OUTPUT_DIR/kernel.flavor"
 copy_aux_output "$OUTPUT_DIR/kernel.flavor" "$WIN_OUTPUT_DIR/kernel.flavor"
 
@@ -354,8 +406,13 @@ echo "Outputs in: $OUTPUT_DIR"
 echo "  Image.gz            - Compressed kernel image"
 echo "  sdm845-razer-aura.dtb - Device tree blob"
 echo "  Image.gz-dtb        - Combined kernel + DTB"
-echo "  modules_install/    - Kernel modules"
-echo "  kernel.release      - Kernel release string for rootfs/boot checks"
+if [ "$KERNEL_SCOPE" = "full" ]; then
+    echo "  modules_install/    - Kernel modules"
+    echo "  kernel.release      - Kernel release string for rootfs/boot checks"
+else
+    echo "  display.kernel-release - Display-only compile validation"
+    echo "  NOTE: this partial artifact cannot be packaged with rootfs."
+fi
 echo "  build.log           - Build log"
 echo ""
 echo "Next: Run bash 03-build-rootfs.sh"

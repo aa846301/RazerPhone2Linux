@@ -76,16 +76,6 @@
 			stride = <(1440 * 4)>;
 			format = "a8r8g8b8";
 
-			/*
-			 * Fake panel node for simpledrm DPI calculation and saner probe
-			 * ordering, following the conservative SDM845 phone bring-up pattern.
-			 */
-			panel = <&fb_panel>;
-
-			fb_panel: fb-panel {
-				width-mm = <71>;
-				height-mm = <126>;
-			};
 		};
 	};
 
@@ -117,7 +107,13 @@
 
 		charge-full-design-microamp-hours = <4000000>;
 		voltage-min-design-microvolt = <3400000>;
-		voltage-max-design-microvolt = <4200000>;
+		/* Factory battery profile: 4.4 V, 4000 mAh. */
+		voltage-max-design-microvolt = <4400000>;
+		/*
+		 * Keep mainline USB DCP charging conservative.  The factory
+		 * downstream tree allows up to 3.9 A, but that policy also
+		 * depends on downstream JEITA and step-charging support.
+		 */
 		constant-charge-current-max-microamp = <2000000>;
 	};
 
@@ -506,10 +502,9 @@
  * Display/GPU clocks
  * ==========================================================================
  *
- * Practical bring-up uses the bootloader framebuffer through simpledrm. Keep
- * display/GPU clock domains disabled here: on SDM845, initializing these clocks
- * can reset the bootloader-programmed scanout state and make simplefb go black
- * a few seconds after boot.
+ * Stage 1 validates Linux 7.1 while preserving the known-good bootloader
+ * framebuffer. Keep these clock domains disabled so probing cannot reset the
+ * bootloader scanout before the native NT36830 test stage.
  */
 &dispcc {
 	status = "disabled";
@@ -581,18 +576,12 @@
  *   - DSI1: Right half (720x2560)
  *   - Combined: 1440x2560
  *
- * Panel power sequence:
+ * Native panel power sequence for the later display-driver test:
  *   1. Enable VDDIO (vreg_l14a_1p88 - 1.8V)
  *   2. Enable VCI (panel_vci_3v3 - 3.3V)
  *   3. Enable POC (panel_vddi_poc_1p8 - 1.8V)
  *   4. Release reset GPIO
  *   5. Send DSI initialization commands
- */
-/*
- * MDSS/DSI disabled until NT36830 panel driver is complete.
- * With MDSS enabled but no panel driver, MSM DRM seizes DSI hardware
- * and corrupts the bootloader framebuffer (花屏).
- * simpledrm owns 0x9d400000 exclusively in this phase.
  */
 &mdss {
 	status = "disabled";
@@ -608,7 +597,6 @@
 	qcom,dual-dsi-mode;
 	qcom,master-dsi;
 	qcom,sync-dual-dsi;
-	qcom,mdss-mdp-transfer-time-us = <12500>;
 
 	/*
 	 * NT36830 panel node on DSI0 (primary interface).
@@ -621,7 +609,7 @@
 	 * to find the secondary DSI host.
 	 */
 	display_panel: panel@0 {
-		compatible = "razer,aura-nt36830-panel", "novatek,nt36830";
+		compatible = "razer,aura-nt36830", "novatek,nt36830";
 		reg = <0>;
 
 		/* Power supplies */
@@ -642,9 +630,6 @@
 		pinctrl-0 = <&panel_default>;
 		pinctrl-1 = <&panel_sleep>;
 		pinctrl-names = "default", "sleep";
-
-		/* Backlight */
-		backlight = <&pmi8998_wled>;
 
 		/*
 		 * Dual-DSI port connections.
@@ -691,7 +676,6 @@
 	vdda-supply = <&vdda_mipi_dsi0_1p2>;
 
 	qcom,dual-dsi-mode;
-	qcom,mdss-mdp-transfer-time-us = <12500>;
 
 	/* DSI1 is slave, so use DSI0 clocks */
 	assigned-clock-parents = <&mdss_dsi0_phy 0>,
@@ -766,14 +750,20 @@
 
 /*
  * ==========================================================================
- * PMI8998 Charger
+ * PMI8998 Charger and Fuel Gauge
  * ==========================================================================
- * Note: The Razer Phone 2 is modified with a direct 4.2V battery supply
- * via a protection board. The charger configuration is maintained for
- * battery monitoring purposes.
+ * Keep these enabled in the base device tree and build their drivers into
+ * the kernel. Charging must not depend on reaching userspace or loading a
+ * module from rootfs when the battery is already low.
  */
 &pmi8998_charger {
 	status = "okay";
+	monitored-battery = <&battery>;
+};
+
+&pmi8998_fg {
+	status = "okay";
+	power-supplies = <&pmi8998_charger>;
 	monitored-battery = <&battery>;
 };
 

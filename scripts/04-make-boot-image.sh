@@ -189,8 +189,9 @@ echo "  Created initramfs-boot.cpio.gz ($(du -h "$RAMDISK" | cut -f1))"
 echo "[3/4] Creating boot.img..."
 
 # Kernel command line for mainline Linux on Razer Phone 2.
-# Keep the final ttyMSM0 console for the SDM845 display race workaround.
-CMDLINE_COMMON="earlycon=msm_geni_serial,0xA84000 console=ttyMSM0,115200n8 console=ttyGS0,115200 clk_ignore_unused pd_ignore_unused fw_devlink=permissive root=/dev/disk/by-partlabel/userdata rootfstype=ext4 rootwait rw loglevel=7 pcie_aspm=off panic=30 init=/usr/lib/systemd/systemd"
+# Keep ttyMSM0 as the only early console. ttyGS0 is an optional USB gadget
+# endpoint and must never become a boot dependency on host carrier/DTR.
+CMDLINE_COMMON="earlycon=msm_geni_serial,0xA84000 console=ttyMSM0,115200n8 clk_ignore_unused pd_ignore_unused fw_devlink=permissive root=/dev/disk/by-partlabel/userdata rootfstype=ext4 rootwait rw loglevel=7 pcie_aspm=off panic=30 init=/usr/lib/systemd/systemd"
 case "$DISPLAY_MODE" in
     helix)
         CMDLINE="$CMDLINE_COMMON fbcon=map:99 vt.global_cursor_default=0 console=ttyMSM0,115200n8"
