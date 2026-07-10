@@ -29,6 +29,9 @@ concurrency:
   group: build-image-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-24.04-arm
@@ -2911,10 +2914,27 @@ jobs:
           ls -lh "${BUILD_ZIP_PATH}" "${BUILD_ZIP_PATH}.sha256"
           cat "${BUILD_ZIP_PATH}.sha256"
 
+      - name: Publish tag release assets
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "${GITHUB_REF_NAME}" \
+              --notes "Razer Phone 2 Linux image build ${GITHUB_REF_NAME}"
+          fi
+          gh release upload "${GITHUB_REF_NAME}" \
+            "${BUILD_ZIP_PATH}" \
+            "${BUILD_ZIP_PATH}.sha256" \
+            --clobber
+
       - name: Upload release zip
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ steps.build-meta.outputs.zip_name }}
+          name: ${{ steps.build-meta.outputs.zip_name }}.zip
           if-no-files-found: error
           compression-level: 0
           path: |

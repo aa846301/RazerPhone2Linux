@@ -1,0 +1,79 @@
+name: Publish release artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish assets to
+        required: true
+        type: string
+      run_id:
+        description: Completed build-image workflow run ID
+        required: true
+        type: string
+      artifact_name:
+        description: Artifact name to download; defaults to razorphone2linux-<tag>
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download completed build artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          BUILD_RUN_ID: ${{ inputs.run_id }}
+          ARTIFACT_NAME_INPUT: ${{ inputs.artifact_name }}
+        run: |
+          set -euo pipefail
+          artifact_name="${ARTIFACT_NAME_INPUT:-razorphone2linux-${RELEASE_TAG}}"
+          mkdir -p downloaded
+
+          echo "Downloading artifact '${artifact_name}' from run ${BUILD_RUN_ID}"
+          if ! gh run download "${BUILD_RUN_ID}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --name "${artifact_name}" \
+              --dir downloaded; then
+            if [[ "${artifact_name}" != *.zip ]]; then
+              echo "Retrying artifact download as '${artifact_name}.zip'"
+              gh run download "${BUILD_RUN_ID}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --name "${artifact_name}.zip" \
+                --dir downloaded
+            else
+              exit 1
+            fi
+          fi
+
+          echo "Downloaded files:"
+          find downloaded -maxdepth 3 -type f -printf '  %p %s bytes\n' | sort
+
+      - name: Publish assets to GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mapfile -t assets < <(
+            find downloaded -type f \( -name '*.zip' -o -name '*.zip.sha256' \) | sort
+          )
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "ERROR: no *.zip or *.zip.sha256 files found in downloaded artifact." >&2
+            exit 1
+          fi
+
+          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release create "${RELEASE_TAG}" \
+              --title "${RELEASE_TAG}" \
+              --notes "Razer Phone 2 Linux image build ${RELEASE_TAG}"
+          fi
+
+          gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber
