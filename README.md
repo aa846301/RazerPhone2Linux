@@ -85,8 +85,8 @@ The `Build flashable image` workflow runs only when a `v*` tag is pushed. The
 YAML spells out the release recipe on GitHub's `ubuntu-24.04-arm` hosted
 runner: select the tag profile, import firmware, build the native-panel/GPU
 kernel, build the ARM64 rootfs, package `boot.img`, and upload
-`boot.img`, `rootfs-sparse.img`, `vbmeta_disabled.img`, initramfs, release
-markers, `userspace.profile`, and `SHA256SUMS`.
+one release zip containing only the flashable images: `boot.img`,
+`rootfs-sparse.img`, and `vbmeta_disabled.img`.
 
 Set `RAZER_FACTORY_ZIP_URL` as a repository variable or secret pointing to
 `aura-p-release-3201-user-full.zip`. Use a variable for a public upstream URL,

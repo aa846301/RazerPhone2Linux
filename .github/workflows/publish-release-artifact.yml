@@ -63,10 +63,10 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t assets < <(
-            find downloaded -type f \( -name '*.zip' -o -name '*.zip.sha256' \) | sort
+            find downloaded -type f -name '*.zip' | sort
           )
           if [ "${#assets[@]}" -eq 0 ]; then
-            echo "ERROR: no *.zip or *.zip.sha256 files found in downloaded artifact." >&2
+            echo "ERROR: no *.zip files found in downloaded artifact." >&2
             exit 1
           fi
 

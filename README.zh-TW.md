@@ -82,9 +82,8 @@ boot packager 會拒絕產生 `boot.img`。
 `Build flashable image` workflow 只會在 push `v*` tag 時執行。YAML 會直接
 列出 GitHub `ubuntu-24.04-arm` hosted runner 上的 release recipe：選 tag
 profile、匯入韌體、建 native-panel/GPU kernel、建 ARM64 rootfs、封裝
-`boot.img`，並上傳
-`boot.img`、`rootfs-sparse.img`、`vbmeta_disabled.img`、initramfs、release
-markers、`userspace.profile` 與 `SHA256SUMS`。
+`boot.img`，並上傳只包含可刷入映像的 release zip：`boot.img`、
+`rootfs-sparse.img` 與 `vbmeta_disabled.img`。
 
 請將 `RAZER_FACTORY_ZIP_URL` 設成 repository variable 或 secret，指向
 `aura-p-release-3201-user-full.zip`。公開上游 URL 可以用 variable；私有

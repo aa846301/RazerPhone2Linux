@@ -2828,7 +2828,7 @@ jobs:
           echo "Default credentials:  klipper / klipper"
           echo "Change immediately after first boot!"
 
-      - name: Write checksums
+      - name: Write build metadata
         shell: bash
         run: |
           set -euo pipefail
@@ -2851,24 +2851,6 @@ jobs:
           native_panel=${RAZER_DISPLAY_NATIVE_PANEL}
           boot_display_mode=${RAZER_BOOT_DISPLAY_MODE}
           EOF
-
-          checksum_files=(
-            boot.img
-            rootfs-sparse.img
-            Image.gz-dtb
-            kernel.config
-            kernel.release
-            rootfs.kernel-release
-            userspace.profile
-            initrd.img
-            vbmeta_disabled.img
-            BUILD-METADATA.txt
-          )
-          for initrd in initrd.img-*; do
-            [ -f "$initrd" ] && checksum_files+=("$initrd")
-          done
-          sha256sum "${checksum_files[@]}" > SHA256SUMS
-          cat SHA256SUMS
 
       - name: Stage completed build output cache
         if: steps.cached-build.outputs.ready != 'true'
@@ -2896,7 +2878,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release
-          rm -f "${BUILD_ZIP_PATH}" "${BUILD_ZIP_PATH}.sha256"
+          rm -f "${BUILD_ZIP_PATH}"
           python3 - <<'PY'
           import glob
           import os
@@ -2910,16 +2892,7 @@ jobs:
           wanted = [
               "boot.img",
               "rootfs-sparse.img",
-              "Image.gz-dtb",
-              "kernel.config",
-              "kernel.release",
-              "rootfs.kernel-release",
-              "userspace.profile",
-              "initrd.img",
-              "initrd.img-*",
               "vbmeta_disabled.img",
-              "SHA256SUMS",
-              "BUILD-METADATA.txt",
           ]
 
           files = []
@@ -2937,9 +2910,7 @@ jobs:
               for path in files:
                   archive.write(path, pathlib.PurePosixPath(zip_name) / path.name)
           PY
-          sha256sum "${BUILD_ZIP_PATH}" > "${BUILD_ZIP_PATH}.sha256"
-          ls -lh "${BUILD_ZIP_PATH}" "${BUILD_ZIP_PATH}.sha256"
-          cat "${BUILD_ZIP_PATH}.sha256"
+          ls -lh "${BUILD_ZIP_PATH}"
 
       - name: Publish tag release assets
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
@@ -2955,7 +2926,6 @@ jobs:
           fi
           gh release upload "${GITHUB_REF_NAME}" \
             "${BUILD_ZIP_PATH}" \
-            "${BUILD_ZIP_PATH}.sha256" \
             --clobber
 
       - name: Upload release zip
@@ -2966,4 +2936,3 @@ jobs:
           compression-level: 0
           path: |
             release/*.zip
-            release/*.zip.sha256

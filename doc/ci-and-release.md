@@ -17,9 +17,8 @@ while the repo scripts remain the local build implementation.
   rootfs overlay, and the native-panel/GPU build setting.
 - Runs the canonical pipeline: `02-build-kernel.sh`, `03-build-rootfs.sh`, and
   `04-make-boot-image.sh`.
-- Uploads `boot.img`, `rootfs-sparse.img`, `vbmeta_disabled.img`, release
-  markers, initramfs, `userspace.profile`, and `SHA256SUMS` as workflow
-  artifacts from `output/base/`.
+- Uploads one release zip containing only the flashable images: `boot.img`,
+  `rootfs-sparse.img`, and `vbmeta_disabled.img`.
 
 ## Firmware policy
 
@@ -39,6 +38,5 @@ validated native panel/GPU path.
 1. For the app-free image, tag `v1.0.0`.
 2. For Home Assistant, tag `v1.0.0-ha`.
 3. For the 3D-printer stack, tag `v1.0.0-3dprinter`.
-4. Download both artifacts from the workflow run.
-5. Verify `SHA256SUMS` and `userspace.profile`.
-6. Flash both A/B boot slots and userdata as documented in `FLASH-GUIDE.md`.
+4. Download the release zip from the workflow run.
+5. Flash both A/B boot slots and userdata as documented in `FLASH-GUIDE.md`.
