@@ -30,6 +30,7 @@
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 #include <dt-bindings/sound/qcom,q6afe.h>
 #include <dt-bindings/sound/qcom,q6asm.h>
+#include <dt-bindings/usb/pd.h>
 
 #include "sdm845.dtsi"
 #include "sdm845-wcd9340.dtsi"
@@ -834,6 +835,51 @@
 &pmi8998_charger {
 	status = "okay";
 	monitored-battery = <&battery>;
+};
+
+/*
+ * PMI8998 integrates the Type-C state machine in the SMB2 USBIN peripheral
+ * and provides a separate SPMI PD PHY at 0x1700.  Keep the first PD bring-up
+ * sink-only: the external 5 V source regulator used by factory Android is not
+ * modelled yet, and charging does not require source/host mode.
+ */
+&pmi8998_lsid0 {
+	pmi8998_typec: typec@1300 {
+		compatible = "qcom,pmi8998-typec";
+		reg = <0x1300>, <0x1700>;
+
+		interrupts = <0x2 0x13 0x7 IRQ_TYPE_EDGE_BOTH>,
+			     <0x2 0x17 0x0 IRQ_TYPE_EDGE_RISING>,
+			     <0x2 0x17 0x1 IRQ_TYPE_EDGE_RISING>,
+			     <0x2 0x17 0x2 IRQ_TYPE_EDGE_RISING>,
+			     <0x2 0x17 0x3 IRQ_TYPE_EDGE_RISING>,
+			     <0x2 0x17 0x4 IRQ_TYPE_EDGE_RISING>,
+			     <0x2 0x17 0x5 IRQ_TYPE_EDGE_RISING>,
+			     <0x2 0x17 0x6 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "type-c-change",
+				  "sig-tx",
+				  "sig-rx",
+				  "msg-tx",
+				  "msg-rx",
+				  "msg-tx-failed",
+				  "msg-tx-discarded",
+				  "msg-rx-discarded";
+
+		vdd-pdphy-supply = <&vdda_qusb_hs0_3p1>;
+		power-supply = <&pmi8998_charger>;
+		status = "okay";
+
+		connector {
+			compatible = "usb-c-connector";
+			power-role = "sink";
+			data-role = "device";
+			try-power-role = "sink";
+
+			op-sink-microwatt = <13500000>;
+			sink-pdos = <PDO_FIXED(5000, 1500, PDO_FIXED_USB_COMM)
+				     PDO_FIXED(9000, 1500, PDO_FIXED_USB_COMM)>;
+		};
+	};
 };
 
 &pmi8998_fg {

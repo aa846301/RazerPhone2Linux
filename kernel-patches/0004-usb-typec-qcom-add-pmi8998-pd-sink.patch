@@ -1,0 +1,592 @@
+diff --git a/Documentation/devicetree/bindings/usb/qcom,pmic-typec.yaml b/Documentation/devicetree/bindings/usb/qcom,pmic-typec.yaml
+index 6d3fa2bc9cee..bac37a5aedc7 100644
+--- a/Documentation/devicetree/bindings/usb/qcom,pmic-typec.yaml
++++ b/Documentation/devicetree/bindings/usb/qcom,pmic-typec.yaml
+@@ -18,6 +18,7 @@ properties:
+       - enum:
+           - qcom,pmi632-typec
+           - qcom,pm8150b-typec
++          - qcom,pmi8998-typec
+       - items:
+           - enum:
+               - qcom,pm6150-typec
+@@ -60,23 +61,7 @@ properties:
+ 
+   interrupt-names:
+     minItems: 8
+-    items:
+-      - const: or-rid-detect-change
+-      - const: vpd-detect
+-      - const: cc-state-change
+-      - const: vconn-oc
+-      - const: vbus-change
+-      - const: attach-detach
+-      - const: legacy-cable-detect
+-      - const: try-snk-src-detect
+-      - const: sig-tx
+-      - const: sig-rx
+-      - const: msg-tx
+-      - const: msg-rx
+-      - const: msg-tx-failed
+-      - const: msg-tx-discarded
+-      - const: msg-rx-discarded
+-      - const: fr-swap
++    maxItems: 16
+ 
+   vdd-vbus-supply:
+     description: VBUS power supply.
+@@ -84,6 +69,11 @@ properties:
+   vdd-pdphy-supply:
+     description: VDD regulator supply to the PDPHY.
+ 
++  power-supply:
++    description:
++      Charger power supply whose input current limit follows the negotiated
++      USB Power Delivery contract.
++
+   port:
+     $ref: /schemas/graph.yaml#/properties/port
+     description:
+@@ -94,7 +84,6 @@ required:
+   - reg
+   - interrupts
+   - interrupt-names
+-  - vdd-vbus-supply
+ 
+ allOf:
+   - if:
+@@ -110,18 +99,77 @@ allOf:
+         interrupts:
+           maxItems: 8
+         interrupt-names:
+-          maxItems: 8
++          items:
++            - const: or-rid-detect-change
++            - const: vpd-detect
++            - const: cc-state-change
++            - const: vconn-oc
++            - const: vbus-change
++            - const: attach-detach
++            - const: legacy-cable-detect
++            - const: try-snk-src-detect
+         vdd-pdphy-supply: false
+-    else:
++      required:
++        - vdd-vbus-supply
++  - if:
++      properties:
++        compatible:
++          contains:
++            const: qcom,pmi8998-typec
++    then:
+       properties:
+         reg:
+-          maxItems: 2
++          minItems: 2
+         interrupts:
+-          minItems: 16
++          minItems: 8
++          maxItems: 8
+         interrupt-names:
+-          maxItems: 16
++          items:
++            - const: type-c-change
++            - const: sig-tx
++            - const: sig-rx
++            - const: msg-tx
++            - const: msg-rx
++            - const: msg-tx-failed
++            - const: msg-tx-discarded
++            - const: msg-rx-discarded
+       required:
+         - vdd-pdphy-supply
++        - power-supply
++    else:
++      if:
++        not:
++          properties:
++            compatible:
++              contains:
++                const: qcom,pmi632-typec
++      then:
++        properties:
++          reg:
++            maxItems: 2
++          interrupts:
++            minItems: 16
++          interrupt-names:
++            items:
++              - const: or-rid-detect-change
++              - const: vpd-detect
++              - const: cc-state-change
++              - const: vconn-oc
++              - const: vbus-change
++              - const: attach-detach
++              - const: legacy-cable-detect
++              - const: try-snk-src-detect
++              - const: sig-tx
++              - const: sig-rx
++              - const: msg-tx
++              - const: msg-rx
++              - const: msg-tx-failed
++              - const: msg-tx-discarded
++              - const: msg-rx-discarded
++              - const: fr-swap
++        required:
++          - vdd-vbus-supply
++          - vdd-pdphy-supply
+ 
+ additionalProperties: false
+ 
+diff --git a/drivers/power/supply/qcom_smbx.c b/drivers/power/supply/qcom_smbx.c
+index 9386adfb7b6f..bafd03ae477d 100644
+--- a/drivers/power/supply/qcom_smbx.c
++++ b/drivers/power/supply/qcom_smbx.c
+@@ -109,6 +109,9 @@ enum smb_generation {
+ #define AUTO_SRC_DETECT_BIT				BIT(3)
+ #define HVDCP_EN_BIT					BIT(2)
+ 
++#define USBIN_ADAPTER_ALLOW_CFG			0x360
++#define USBIN_ADAPTER_ALLOW_5V_TO_9V			0x8
++
+ #define USBIN_LOAD_CFG					0x65
+ #define ICL_OVERRIDE_AFTER_APSD_BIT			BIT(4)
+ 
+@@ -835,6 +838,8 @@ static const struct smb_init_register smb2_init_seq[] = {
+ 	  .val = SMB2_VBT_LT_CHG_RECHARGE_THRESH_SEL_BIT },
+ 	/* Enable charging */
+ 	{ .addr = USBIN_OPTIONS_1_CFG, .mask = HVDCP_EN_BIT, .val = 0 },
++	{ .addr = USBIN_ADAPTER_ALLOW_CFG, .mask = GENMASK(3, 0),
++	  .val = USBIN_ADAPTER_ALLOW_5V_TO_9V },
+ 	{ .addr = CHARGING_ENABLE_CMD,
+ 	  .mask = CHARGING_ENABLE_CMD_BIT,
+ 	  .val = CHARGING_ENABLE_CMD_BIT },
+diff --git a/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.c b/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.c
+index 3766790c1548..68e9766aa328 100644
+--- a/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.c
++++ b/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.c
+@@ -11,6 +11,7 @@
+ #include <linux/of.h>
+ #include <linux/of_graph.h>
+ #include <linux/platform_device.h>
++#include <linux/power_supply.h>
+ #include <linux/regmap.h>
+ #include <linux/regulator/consumer.h>
+ #include <linux/slab.h>
+@@ -27,6 +28,7 @@
+ struct pmic_typec_resources {
+ 	const struct pmic_typec_pdphy_resources	*pdphy_res;
+ 	const struct pmic_typec_port_resources	*port_res;
++	bool					charger_required;
+ };
+ 
+ static int qcom_pmic_typec_init(struct tcpc_dev *tcpc)
+@@ -34,6 +36,23 @@ static int qcom_pmic_typec_init(struct tcpc_dev *tcpc)
+ 	return 0;
+ }
+ 
++static int qcom_pmic_typec_set_current_limit(struct tcpc_dev *tcpc,
++					      u32 max_ma, u32 mv)
++{
++	struct pmic_typec *tcpm = tcpc_to_tcpm(tcpc);
++	union power_supply_propval val;
++
++	if (!tcpm->charger || !max_ma)
++		return 0;
++
++	if (mv != 5000 && mv != 9000)
++		return -EINVAL;
++
++	val.intval = max_ma * 1000;
++	return power_supply_set_property(tcpm->charger,
++					 POWER_SUPPLY_PROP_CURRENT_MAX, &val);
++}
++
+ static int qcom_pmic_typec_probe(struct platform_device *pdev)
+ {
+ 	struct pmic_typec *tcpm;
+@@ -62,6 +81,19 @@ static int qcom_pmic_typec_probe(struct platform_device *pdev)
+ 		return -ENODEV;
+ 	}
+ 
++	if (res->charger_required) {
++		tcpm->charger = devm_power_supply_get_by_reference(dev,
++							       "power-supply");
++		if (IS_ERR(tcpm->charger))
++			return dev_err_probe(dev, PTR_ERR(tcpm->charger),
++					     "failed to get charger power supply\n");
++		if (!tcpm->charger)
++			return dev_err_probe(dev, -EPROBE_DEFER,
++					     "charger power supply is not ready\n");
++
++		tcpm->tcpc.set_current_limit = qcom_pmic_typec_set_current_limit;
++	}
++
+ 	ret = of_property_read_u32_index(np, "reg", 0, &base);
+ 	if (ret)
+ 		return ret;
+@@ -150,9 +182,16 @@ static const struct pmic_typec_resources pmi632_typec_res = {
+ 	.port_res = &pm8150b_port_res,
+ };
+ 
++static const struct pmic_typec_resources pmi8998_typec_res = {
++	.pdphy_res = &pm8150b_pdphy_res,
++	.port_res = &pmi8998_port_res,
++	.charger_required = true,
++};
++
+ static const struct of_device_id qcom_pmic_typec_table[] = {
+ 	{ .compatible = "qcom,pm8150b-typec", .data = &pm8150b_typec_res },
+ 	{ .compatible = "qcom,pmi632-typec", .data = &pmi632_typec_res },
++	{ .compatible = "qcom,pmi8998-typec", .data = &pmi8998_typec_res },
+ 	{ }
+ };
+ MODULE_DEVICE_TABLE(of, qcom_pmic_typec_table);
+diff --git a/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.h b/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.h
+index 3c75820c9187..54c63a7bb099 100644
+--- a/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.h
++++ b/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec.h
+@@ -13,6 +13,8 @@ struct pmic_typec {
+ 	struct pmic_typec_pdphy	*pmic_typec_pdphy;
+ 	struct pmic_typec_port	*pmic_typec_port;
+ 
++	struct power_supply	*charger;
++
+ 	int (*pdphy_start)(struct pmic_typec *tcpm,
+ 			   struct tcpm_port *tcpm_port);
+ 	void (*pdphy_stop)(struct pmic_typec *tcpm);
+diff --git a/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec_port.c b/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec_port.c
+index 8051eaa46991..59a1307a5997 100644
+--- a/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec_port.c
++++ b/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec_port.c
+@@ -158,6 +158,41 @@
+ #define PMIC_TYPEC_LEGACY_CABLE_IRQ			0x6
+ #define PMIC_TYPEC_TRY_SNK_SRC_IRQ			0x7
+ 
++/* PMI8998 SMB2 USBIN Type-C register layout */
++#define PMI8998_TYPEC_STATUS_1_REG			0x0B
++#define PMI8998_UFP_TYPEC_RDSTD				BIT(7)
++#define PMI8998_UFP_TYPEC_RD1P5				BIT(6)
++#define PMI8998_UFP_TYPEC_RD3P0				BIT(5)
++
++#define PMI8998_TYPEC_STATUS_4_REG			0x0E
++#define PMI8998_UFP_DFP_MODE_STATUS			BIT(7)
++#define PMI8998_TYPEC_VBUS_STATUS			BIT(6)
++#define PMI8998_CC_ORIENTATION				BIT(1)
++#define PMI8998_CC_ATTACHED				BIT(0)
++
++#define PMI8998_TYPEC_CFG_REG				0x58
++#define PMI8998_FACTORY_MODE_DETECTION_EN		BIT(5)
++#define PMI8998_VCONN_OC_CFG				BIT(1)
++
++#define PMI8998_TYPEC_CFG_2_REG				0x59
++#define PMI8998_DFP_CC_1P4V_OR_1P6V			BIT(6)
++#define PMI8998_VCONN_SOFTSTART_CFG_MASK		GENMASK(5, 4)
++
++#define PMI8998_TYPEC_CFG_3_REG				0x5A
++#define PMI8998_LEGACY_CABLE_INT_EN			BIT(6)
++#define PMI8998_NONCOMPLIANT_LEGACY_CABLE_INT_EN	BIT(5)
++#define PMI8998_EN_TRYSINK_MODE				BIT(2)
++
++#define PMI8998_TYPEC_INTRPT_ENB_REG			0x67
++#define PMI8998_TYPEC_CCSTATE_CHANGE_INT_EN		BIT(2)
++
++#define PMI8998_TYPEC_SW_CTRL_REG			0x68
++#define PMI8998_VCONN_EN_SRC				BIT(4)
++#define PMI8998_VCONN_EN_VALUE				BIT(3)
++#define PMI8998_TYPEC_POWER_ROLE_CMD_MASK		GENMASK(2, 0)
++#define PMI8998_UFP_EN_CMD				BIT(2)
++#define PMI8998_TYPEC_DISABLE_CMD			BIT(0)
++
+ struct pmic_typec_port_irq_data {
+ 	int				virq;
+ 	int				irq;
+@@ -179,6 +214,7 @@ struct pmic_typec_port {
+ 	int				cc;
+ 	bool				debouncing_cc;
+ 	struct delayed_work		cc_debounce_dwork;
++	bool				pmi8998;
+ 
+ 	spinlock_t			lock;	/* Register atomicity */
+ };
+@@ -255,6 +291,8 @@ static irqreturn_t pmic_typec_port_isr(int irq, void *dev_id)
+ 		vbus_change = true;
+ 		break;
+ 	case PMIC_TYPEC_CC_STATE_IRQ:
++		vbus_change = pmic_typec_port->pmi8998;
++		fallthrough;
+ 	case PMIC_TYPEC_ATTACH_DETACH_IRQ:
+ 		if (!pmic_typec_port->debouncing_cc)
+ 			cc_change = true;
+@@ -279,6 +317,10 @@ static int qcom_pmic_typec_port_vbus_detect(struct pmic_typec_port *pmic_typec_p
+ 	unsigned int misc;
+ 	int ret;
+ 
++	if (pmic_typec_port->pmi8998)
++		return regmap_test_bits(pmic_typec_port->regmap,
++			pmic_typec_port->base + PMI8998_TYPEC_STATUS_4_REG,
++			PMI8998_TYPEC_VBUS_STATUS);
+ 	ret = regmap_read(pmic_typec_port->regmap,
+ 			  pmic_typec_port->base + TYPEC_MISC_STATUS_REG,
+ 			  &misc);
+@@ -296,6 +338,9 @@ static int qcom_pmic_typec_port_vbus_toggle(struct pmic_typec_port *pmic_typec_p
+ 	u32 val;
+ 	int ret;
+ 
++	if (!pmic_typec_port->vdd_vbus)
++		return on ? -EOPNOTSUPP : 0;
++
+ 	if (on) {
+ 		ret = regulator_enable(pmic_typec_port->vdd_vbus);
+ 		if (ret)
+@@ -358,6 +403,44 @@ static int qcom_pmic_typec_port_set_vbus(struct tcpc_dev *tcpc, bool on, bool si
+ 	return ret;
+ }
+ 
++static int qcom_pmi8998_typec_port_get_cc(struct pmic_typec_port *port,
++					   enum typec_cc_status *cc1,
++					   enum typec_cc_status *cc2)
++{
++	unsigned int status, rp;
++	int ret;
++
++	*cc1 = TYPEC_CC_OPEN;
++	*cc2 = TYPEC_CC_OPEN;
++
++	ret = regmap_read(port->regmap,
++			  port->base + PMI8998_TYPEC_STATUS_4_REG, &status);
++	if (ret || !(status & PMI8998_CC_ATTACHED))
++		return ret;
++
++	if (status & PMI8998_UFP_DFP_MODE_STATUS)
++		return -EOPNOTSUPP;
++
++	ret = regmap_read(port->regmap,
++			  port->base + PMI8998_TYPEC_STATUS_1_REG, &rp);
++	if (ret)
++		return ret;
++
++	if (rp & PMI8998_UFP_TYPEC_RD3P0)
++		rp = TYPEC_CC_RP_3_0;
++	else if (rp & PMI8998_UFP_TYPEC_RD1P5)
++		rp = TYPEC_CC_RP_1_5;
++	else
++		rp = TYPEC_CC_RP_DEF;
++
++	if (status & PMI8998_CC_ORIENTATION)
++		*cc2 = rp;
++	else
++		*cc1 = rp;
++
++	return 0;
++}
++
+ static int qcom_pmic_typec_port_get_cc(struct tcpc_dev *tcpc,
+ 				       enum typec_cc_status *cc1,
+ 				       enum typec_cc_status *cc2)
+@@ -369,6 +452,9 @@ static int qcom_pmic_typec_port_get_cc(struct tcpc_dev *tcpc,
+ 	bool attached;
+ 	int ret = 0;
+ 
++	if (pmic_typec_port->pmi8998)
++		return qcom_pmi8998_typec_port_get_cc(pmic_typec_port, cc1, cc2);
++
+ 	ret = regmap_read(pmic_typec_port->regmap,
+ 			  pmic_typec_port->base + TYPEC_MISC_STATUS_REG, &misc);
+ 	if (ret)
+@@ -455,6 +541,27 @@ static void qcom_pmic_set_cc_debounce(struct pmic_typec_port *pmic_typec_port)
+ 			      msecs_to_jiffies(2));
+ }
+ 
++static int qcom_pmi8998_typec_port_set_cc(struct pmic_typec_port *port,
++					   enum typec_cc_status cc)
++{
++	u8 value;
++
++	switch (cc) {
++	case TYPEC_CC_OPEN:
++		value = PMI8998_TYPEC_DISABLE_CMD;
++		break;
++	case TYPEC_CC_RD:
++		value = PMI8998_UFP_EN_CMD;
++		break;
++	default:
++		return -EOPNOTSUPP;
++	}
++
++	return regmap_update_bits(port->regmap,
++			port->base + PMI8998_TYPEC_SW_CTRL_REG,
++			PMI8998_TYPEC_POWER_ROLE_CMD_MASK, value);
++}
++
+ static int qcom_pmic_typec_port_set_cc(struct tcpc_dev *tcpc,
+ 				       enum typec_cc_status cc)
+ {
+@@ -466,6 +573,9 @@ static int qcom_pmic_typec_port_set_cc(struct tcpc_dev *tcpc,
+ 	unsigned long flags;
+ 	int ret;
+ 
++	if (pmic_typec_port->pmi8998)
++		return qcom_pmi8998_typec_port_set_cc(pmic_typec_port, cc);
++
+ 	spin_lock_irqsave(&pmic_typec_port->lock, flags);
+ 
+ 	ret = regmap_read(pmic_typec_port->regmap,
+@@ -539,6 +649,9 @@ static int qcom_pmic_typec_port_set_vconn(struct tcpc_dev *tcpc, bool on)
+ 	unsigned long flags;
+ 	int ret;
+ 
++	if (pmic_typec_port->pmi8998)
++		return on ? -EOPNOTSUPP : 0;
++
+ 	spin_lock_irqsave(&pmic_typec_port->lock, flags);
+ 
+ 	ret = regmap_read(pmic_typec_port->regmap,
+@@ -581,6 +694,12 @@ static int qcom_pmic_typec_port_start_toggling(struct tcpc_dev *tcpc,
+ 	unsigned long flags;
+ 	int ret;
+ 
++	if (pmic_typec_port->pmi8998) {
++		if (port_type != TYPEC_PORT_SNK)
++			return -EOPNOTSUPP;
++		return qcom_pmi8998_typec_port_set_cc(pmic_typec_port, TYPEC_CC_RD);
++	}
++
+ 	switch (port_type) {
+ 	case TYPEC_PORT_SRC:
+ 		mode = EN_SRC_ONLY;
+@@ -635,6 +754,50 @@ static int qcom_pmic_typec_port_start_toggling(struct tcpc_dev *tcpc,
+ 	(TYPEC_STATE_MACHINE_CHANGE_INT_EN | TYPEC_VBUS_ERROR_INT_EN | \
+ 	 TYPEC_DEBOUNCE_DONE_INT_EN)
+ 
++static int qcom_pmi8998_typec_port_start(struct pmic_typec_port *port)
++{
++	u8 mask;
++	int ret;
++
++	ret = regmap_write(port->regmap,
++			   port->base + PMI8998_TYPEC_INTRPT_ENB_REG,
++			   PMI8998_TYPEC_CCSTATE_CHANGE_INT_EN);
++	if (ret)
++		return ret;
++
++	mask = PMI8998_FACTORY_MODE_DETECTION_EN | PMI8998_VCONN_OC_CFG;
++	ret = regmap_update_bits(port->regmap,
++				 port->base + PMI8998_TYPEC_CFG_REG, mask, 0);
++	if (ret)
++		return ret;
++
++	mask = PMI8998_VCONN_SOFTSTART_CFG_MASK |
++	       PMI8998_DFP_CC_1P4V_OR_1P6V;
++	ret = regmap_update_bits(port->regmap,
++				 port->base + PMI8998_TYPEC_CFG_2_REG,
++				 mask, mask);
++	if (ret)
++		return ret;
++
++	mask = PMI8998_EN_TRYSINK_MODE |
++	       PMI8998_NONCOMPLIANT_LEGACY_CABLE_INT_EN |
++	       PMI8998_LEGACY_CABLE_INT_EN;
++	ret = regmap_update_bits(port->regmap,
++				 port->base + PMI8998_TYPEC_CFG_3_REG,
++				 mask, 0);
++	if (ret)
++		return ret;
++
++	ret = regmap_update_bits(port->regmap,
++				 port->base + PMI8998_TYPEC_SW_CTRL_REG,
++				 PMI8998_VCONN_EN_SRC | PMI8998_VCONN_EN_VALUE,
++				 PMI8998_VCONN_EN_SRC);
++	if (ret)
++		return ret;
++
++	return qcom_pmi8998_typec_port_set_cc(port, TYPEC_CC_RD);
++}
++
+ static int qcom_pmic_typec_port_start(struct pmic_typec *tcpm,
+ 				      struct tcpm_port *tcpm_port)
+ {
+@@ -643,6 +806,14 @@ static int qcom_pmic_typec_port_start(struct pmic_typec *tcpm,
+ 	int mask;
+ 	int ret;
+ 
++	if (pmic_typec_port->pmi8998) {
++		pmic_typec_port->tcpm_port = tcpm_port;
++		ret = qcom_pmi8998_typec_port_start(pmic_typec_port);
++		if (ret)
++			return ret;
++		goto enable_irqs;
++	}
++
+ 	/* Configure interrupt sources */
+ 	ret = regmap_write(pmic_typec_port->regmap,
+ 			   pmic_typec_port->base + TYPEC_INTERRUPT_EN_CFG_1_REG,
+@@ -679,6 +850,7 @@ static int qcom_pmic_typec_port_start(struct pmic_typec *tcpm,
+ 
+ 	pmic_typec_port->tcpm_port = tcpm_port;
+ 
++enable_irqs:
+ 	for (i = 0; i < pmic_typec_port->nr_irqs; i++)
+ 		enable_irq(pmic_typec_port->irq_data[i].irq);
+ 
+@@ -720,8 +892,15 @@ int qcom_pmic_typec_port_probe(struct platform_device *pdev,
+ 
+ 	mutex_init(&pmic_typec_port->vbus_lock);
+ 
+-	pmic_typec_port->vdd_vbus = devm_regulator_get(dev, "vdd-vbus");
+-	if (IS_ERR(pmic_typec_port->vdd_vbus))
++	if (res->vbus_optional)
++		pmic_typec_port->vdd_vbus = devm_regulator_get_optional(dev,
++								 "vdd-vbus");
++	else
++		pmic_typec_port->vdd_vbus = devm_regulator_get(dev, "vdd-vbus");
++	if (res->vbus_optional &&
++	    PTR_ERR_OR_ZERO(pmic_typec_port->vdd_vbus) == -ENODEV)
++		pmic_typec_port->vdd_vbus = NULL;
++	else if (IS_ERR(pmic_typec_port->vdd_vbus))
+ 		return PTR_ERR(pmic_typec_port->vdd_vbus);
+ 
+ 	pmic_typec_port->dev = dev;
+@@ -729,6 +908,7 @@ int qcom_pmic_typec_port_probe(struct platform_device *pdev,
+ 	pmic_typec_port->regmap = regmap;
+ 	pmic_typec_port->nr_irqs = res->nr_irqs;
+ 	pmic_typec_port->irq_data = irq_data;
++	pmic_typec_port->pmi8998 = res->pmi8998;
+ 	spin_lock_init(&pmic_typec_port->lock);
+ 	INIT_DELAYED_WORK(&pmic_typec_port->cc_debounce_dwork,
+ 			  qcom_pmic_typec_port_cc_debounce);
+@@ -807,3 +987,15 @@ const struct pmic_typec_port_resources pm8150b_port_res = {
+ 	},
+ 	.nr_irqs = 7,
+ };
++
++const struct pmic_typec_port_resources pmi8998_port_res = {
++	.irq_params = {
++		{
++			.irq_name = "type-c-change",
++			.virq = PMIC_TYPEC_CC_STATE_IRQ,
++		},
++	},
++	.nr_irqs = 1,
++	.vbus_optional = true,
++	.pmi8998 = true,
++};
+diff --git a/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec_port.h b/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec_port.h
+index 2ca83a46cf3b..7f1ac4a348b4 100644
+--- a/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec_port.h
++++ b/drivers/usb/typec/tcpm/qcom/qcom_pmic_typec_port.h
+@@ -20,11 +20,14 @@ struct pmic_typec_port_irq_params {
+ struct pmic_typec_port_resources {
+ 	unsigned int				nr_irqs;
+ 	const struct pmic_typec_port_irq_params	irq_params[PMIC_TYPEC_MAX_IRQS];
++	bool					vbus_optional;
++	bool					pmi8998;
+ };
+ 
+ /* API */
+ 
+ extern const struct pmic_typec_port_resources pm8150b_port_res;
++extern const struct pmic_typec_port_resources pmi8998_port_res;
+ 
+ int qcom_pmic_typec_port_probe(struct platform_device *pdev,
+ 			       struct pmic_typec *tcpm,
