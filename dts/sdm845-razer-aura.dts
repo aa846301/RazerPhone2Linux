@@ -666,6 +666,7 @@
 	display_panel: panel@0 {
 		compatible = "razer,aura-nt36830", "novatek,nt36830";
 		reg = <0>;
+		backlight = <&pmi8998_wled>;
 
 		/* Power supplies */
 		vddio-supply = <&vreg_l14a_1p88>;
@@ -847,12 +848,16 @@
  * ==========================================================================
  */
 &pmi8998_wled {
-	/*
-	 * Keep WLED disabled during framebuffer handoff bring-up. Enabling the
-	 * PMI8998 backlight without Razer-specific current/string limits can leave
-	 * the panel at unsafe brightness across warm reboots.
-	 */
-	status = "disabled";
+	/* Razer/FIH rc2 factory values translated to the mainline binding. */
+	qcom,enabled-strings = <0 1 2 3>;
+	qcom,current-limit-microamp = <20000>;
+	qcom,current-boost-limit = <970>;
+	qcom,ovp-millivolt = <29600>;
+	qcom,switching-freq = <1600>;
+	qcom,cabc;
+	max-brightness = <4095>;
+	default-brightness = <2048>;
+	status = "okay";
 };
 
 /*

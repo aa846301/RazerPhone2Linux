@@ -16,7 +16,6 @@
  * translated to mipi_dsi_dcs_write_seq_multi() calls.
  */
 
-#include <linux/backlight.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
 #include <linux/module.h>
@@ -598,46 +597,6 @@ static const struct drm_panel_funcs nt36830_panel_funcs = {
 };
 
 /*
- * Backlight via MIPI DCS (12-bit brightness, 0-4095).
- * From DTS: bl-min-level=1, bl-max-level=4095.
- */
-static int nt36830_bl_update_status(struct backlight_device *bl)
-{
-	struct nt36830_panel *ctx = bl_get_data(bl);
-	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi0 };
-	u16 brightness = backlight_get_brightness(bl);
-	u8 payload[] = {
-		MIPI_DCS_SET_DISPLAY_BRIGHTNESS,
-		brightness >> 8,
-		brightness & 0xff,
-	};
-
-	mipi_dsi_dual_dcs_write_buffer_multi(&dsi_ctx, ctx->dsi0, ctx->dsi1,
-					     payload, sizeof(payload));
-
-	return dsi_ctx.accum_err;
-}
-
-static const struct backlight_ops nt36830_bl_ops = {
-	.update_status = nt36830_bl_update_status,
-};
-
-static struct backlight_device *
-nt36830_create_backlight(struct nt36830_panel *ctx)
-{
-	struct device *dev = &ctx->dsi0->dev;
-	const struct backlight_properties props = {
-		.type = BACKLIGHT_RAW,
-		.brightness = 2048,
-		.max_brightness = 4095,
-		.scale = BACKLIGHT_SCALE_NON_LINEAR,
-	};
-
-	return devm_backlight_device_register(dev, dev_name(dev), dev, ctx,
-					      &nt36830_bl_ops, &props);
-}
-
-/*
  * DSC configuration: VESA DSC 1.1
  *
  * From official DTS:
@@ -784,11 +743,9 @@ static int nt36830_probe(struct mipi_dsi_device *dsi)
 	/* Set prepare_prev_first for proper power sequencing */
 	ctx->panel.prepare_prev_first = true;
 
-	/* Create backlight device */
-	ctx->panel.backlight = nt36830_create_backlight(ctx);
-	if (IS_ERR(ctx->panel.backlight))
-		return dev_err_probe(dev, PTR_ERR(ctx->panel.backlight),
-				     "Failed to create backlight\n");
+	ret = drm_panel_of_backlight(&ctx->panel);
+	if (ret)
+		return dev_err_probe(dev, ret, "Failed to get WLED backlight\n");
 
 	drm_panel_add(&ctx->panel);
 

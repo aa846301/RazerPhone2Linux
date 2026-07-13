@@ -35,7 +35,14 @@ The local downstream source confirms how the factory DTS is consumed:
 | `dsi_panel_parse_cmd_sets()` in DRM staging `dsi_panel.c` | Parses the same command packet arrays and command state properties | Confirms generator output is only a convenience decoder, not a higher authority than raw DTS |
 | `mdss_dsi_panel_parse_dt()` / related helpers | Reads reset sequence, on/off command sets, timing, clock, and backlight control from DTS | No separate Razer C table is expected |
 | `dsi_panel_parse_dsc_params()` / `mdss_dsi_parse_dsc_*` | Reads DSC slice size, bpc, bpp, block prediction, and encoder count from DTS | Driver DSC values should track the factory extclk command node |
-| backlight parser | `bl_ctrl_wled` maps to WLED in downstream | Mainline backlight remains cautious; do not auto-raise brightness in normal boot |
+| backlight parser | `bl_ctrl_wled` maps to PMI8998 WLED in downstream | Mainline panel uses `drm_panel_of_backlight()` with the factory 4-string, 20 mA, 1600 kHz WLED configuration |
+
+The factory `fih/rc2/display.dtsi` enables all four WLED strings, sets the
+per-string full-scale current to 20000 uA, selects 1600 kHz switching, and
+enables CABC. Its omitted PMI8998 defaults are 970 mA boost current and
+29.6 V OVP; the mainline DTS states those values explicitly. A live fbdev
+blank test confirmed that DRM sets `bl_power=4` and the physical backlight
+turns off.
 
 ## Factory extclk command-mode panel values
 
