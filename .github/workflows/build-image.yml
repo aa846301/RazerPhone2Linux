@@ -267,7 +267,7 @@ jobs:
           set -euo pipefail
           if [ -n "${RAZER_FACTORY_ZIP_URL}" ]; then
             missing_tools=0
-            for tool in 7z simg2img debugfs; do
+            for tool in 7z simg2img debugfs mcopy; do
               command -v "${tool}" >/dev/null 2>&1 || missing_tools=1
             done
             if [ "${missing_tools}" = "1" ]; then
@@ -275,7 +275,8 @@ jobs:
               sudo apt-get install -y \
                 p7zip-full \
                 android-sdk-libsparse-utils \
-                e2fsprogs
+                e2fsprogs \
+                mtools
             fi
           fi
 
@@ -420,17 +421,30 @@ jobs:
             bluetooth_img="${tmpdir}/bluetooth.img"
             test -s "${bluetooth_img}"
 
-            # Factory bluetooth.img is an Android sparse ext4 image. 7z can
-            # list some sparse images but terminates with "Unexpected end of
-            # archive" when extracting them, so normalize it first and let
-            # debugfs read the ext4 filesystem directly.
+            # Razer factory packages have shipped this partition as VFAT,
+            # while other Android packages may use sparse ext4. Detect the
+            # actual payload instead of asking 7z to guess from the suffix.
             bluetooth_raw="${tmpdir}/bluetooth.raw.img"
-            if ! simg2img "${bluetooth_img}" "${bluetooth_raw}"; then
-              echo "bluetooth.img is already raw; using it directly."
+            image_type="$(file -b "${bluetooth_img}")"
+            if [[ "${image_type}" == *"Android sparse image"* ]]; then
+              simg2img "${bluetooth_img}" "${bluetooth_raw}"
+            else
               cp -f "${bluetooth_img}" "${bluetooth_raw}"
             fi
+
             mkdir -p "${tmpdir}/fs"
-            debugfs -R "rdump / ${tmpdir}/fs" "${bluetooth_raw}"
+            raw_type="$(file -b "${bluetooth_raw}")"
+            echo "Bluetooth firmware image type: ${raw_type}"
+            if [[ "${raw_type}" == *"FAT"* ]]; then
+              mcopy -i "${bluetooth_raw}" -s '::*' "${tmpdir}/fs/"
+            elif [[ "${raw_type}" == *"ext2 filesystem"* ]] || \
+                 [[ "${raw_type}" == *"ext3 filesystem"* ]] || \
+                 [[ "${raw_type}" == *"ext4 filesystem"* ]]; then
+              debugfs -R "rdump / ${tmpdir}/fs" "${bluetooth_raw}"
+            else
+              echo "ERROR: unsupported bluetooth.img filesystem: ${raw_type}" >&2
+              exit 1
+            fi
 
             tlv_src="$(find "${tmpdir}/fs" -type f -iname crbtfw21.tlv -print -quit)"
             nvm_src="$(find "${tmpdir}/fs" -type f -iname crnv21.bin -print -quit)"
