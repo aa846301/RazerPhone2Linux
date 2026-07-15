@@ -85,7 +85,7 @@ fi
 
 trap cleanup_mounts EXIT
 
-"$PROJECT_DIR/scripts/register-binfmt.sh"
+bash "$PROJECT_DIR/scripts/register-binfmt.sh"
 mkdir -p "$OUTPUT_DIR" "$WIN_OUTPUT_DIR" "$MOUNT_DIR"
 
 if [ ! -f "$ROOTFS_IMG" ]; then

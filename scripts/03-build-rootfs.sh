@@ -113,7 +113,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 trap cleanup_mounts EXIT
 
-"$PROJECT_DIR/scripts/register-binfmt.sh"
+bash "$PROJECT_DIR/scripts/register-binfmt.sh"
 
 # -------------------------------------------------------
 # Step 1: Create rootfs image
