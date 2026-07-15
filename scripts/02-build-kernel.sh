@@ -380,6 +380,9 @@ fi
 
 # Finalize config
 make olddefconfig
+# Materialize generated config headers before reading kernelrelease. Without
+# this, kernelrelease can reflect stale defconfig state until the first build.
+make -s prepare
 
 echo "[4/6] Kernel configured."
 
@@ -431,6 +434,13 @@ else
 fi
 
 echo "[5/6] Build complete."
+FINAL_KERNEL_RELEASE=$(make -s kernelrelease)
+if [ "$FINAL_KERNEL_RELEASE" != "$KERNEL_RELEASE" ]; then
+    echo "ERROR: kernel release changed during the build." >&2
+    echo "Before build: $KERNEL_RELEASE" >&2
+    echo "After build:  $FINAL_KERNEL_RELEASE" >&2
+    exit 1
+fi
 if command -v ccache >/dev/null 2>&1; then
     ccache --show-stats
 fi
