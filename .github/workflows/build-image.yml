@@ -179,12 +179,23 @@ jobs:
               command -v "${tool}" >/dev/null 2>&1 || missing_tools=1
             done
             if [ "${missing_tools}" = "1" ]; then
-              sudo apt-get update
-              sudo apt-get install -y \
-                p7zip-full \
-                android-sdk-libsparse-utils \
-                e2fsprogs \
-                mtools
+              for attempt in 1 2 3; do
+                if sudo apt-get -o Acquire::Retries=3 update &&
+                   sudo env DEBIAN_FRONTEND=noninteractive \
+                     apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                       7zip \
+                       android-sdk-libsparse-utils \
+                       e2fsprogs \
+                       mtools; then
+                  break
+                fi
+                if [ "${attempt}" = "3" ]; then
+                  echo "ERROR: firmware extraction tool installation failed after ${attempt} attempts." >&2
+                  exit 1
+                fi
+                echo "Firmware tool installation attempt ${attempt} failed; retrying..."
+                sleep 10
+              done
             fi
           fi
 
