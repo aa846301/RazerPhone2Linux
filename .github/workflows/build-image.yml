@@ -265,9 +265,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -n "${RAZER_FACTORY_ZIP_URL}" ] && ! command -v 7z >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y p7zip-full
+          if [ -n "${RAZER_FACTORY_ZIP_URL}" ]; then
+            missing_tools=0
+            for tool in 7z simg2img debugfs; do
+              command -v "${tool}" >/dev/null 2>&1 || missing_tools=1
+            done
+            if [ "${missing_tools}" = "1" ]; then
+              sudo apt-get update
+              sudo apt-get install -y \
+                p7zip-full \
+                android-sdk-libsparse-utils \
+                e2fsprogs
+            fi
           fi
 
       - name: Extract modem image from factory package
@@ -410,8 +419,18 @@ jobs:
             7z e -y -o"${tmpdir}" "${RAZER_FACTORY_ZIP}" "${bluetooth_entry}" >/dev/null
             bluetooth_img="${tmpdir}/bluetooth.img"
             test -s "${bluetooth_img}"
+
+            # Factory bluetooth.img is an Android sparse ext4 image. 7z can
+            # list some sparse images but terminates with "Unexpected end of
+            # archive" when extracting them, so normalize it first and let
+            # debugfs read the ext4 filesystem directly.
+            bluetooth_raw="${tmpdir}/bluetooth.raw.img"
+            if ! simg2img "${bluetooth_img}" "${bluetooth_raw}"; then
+              echo "bluetooth.img is already raw; using it directly."
+              cp -f "${bluetooth_img}" "${bluetooth_raw}"
+            fi
             mkdir -p "${tmpdir}/fs"
-            7z x -y -o"${tmpdir}/fs" "${bluetooth_img}" >/dev/null
+            debugfs -R "rdump / ${tmpdir}/fs" "${bluetooth_raw}"
 
             tlv_src="$(find "${tmpdir}/fs" -type f -iname crbtfw21.tlv -print -quit)"
             nvm_src="$(find "${tmpdir}/fs" -type f -iname crnv21.bin -print -quit)"
