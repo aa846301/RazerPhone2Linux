@@ -389,6 +389,13 @@ make olddefconfig
 # this, kernelrelease can reflect stale defconfig state until the first build.
 make -s prepare
 
+for opt in CHARGER_QCOM_SMB2 BATTERY_PMI8998_FG QCOM_SPMI_RRADC; do
+    if ! grep -q "^CONFIG_${opt}=y$" .config; then
+        echo "ERROR: required power driver CONFIG_${opt} is not built in." >&2
+        exit 1
+    fi
+done
+
 echo "[4/6] Kernel configured."
 
 KERNEL_RELEASE=$(make -s kernelrelease)

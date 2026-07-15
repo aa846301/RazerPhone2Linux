@@ -13,6 +13,9 @@ aura-p-release-3201-user-full/
 11.1.2.2-OP6-FASTBOOT.zip
 payload-dumper-go_*.tar.gz
 
+# Official vendor kernel source kept locally for implementation reference.
+vendor-source/razer-phone2-smr7/msm-4.9/
+
 # Proprietary Razer/Qualcomm firmware. Keep only extraction instructions.
 firmware/**
 !firmware/README.md

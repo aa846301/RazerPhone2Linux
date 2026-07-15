@@ -16,8 +16,9 @@ charge-limited, and ready for users to install their own software.
 - Adreno 630 hardware GL works through freedreno when the stock Razer
   `a630_zap.*` firmware and linux-firmware `a630_sqe.fw` are present.
 - PMI8998 SMB2 charger, fuel gauge, and RRADC are enabled. A rootfs service
-  suspends USB input at 80% and resumes it at 40% through the SMB2 power-supply
-  control, while the DTS keeps a conservative 2 A charge limit.
+  uses the standard SMB2 `charge_behaviour` power-supply interface to inhibit
+  battery charging at 80% while retaining USB input, then returns to automatic
+  charging at 40%. The DTS keeps a conservative 2 A charge limit.
 - The base image blanks the panel after boot on normal images, and keeps a
   console mode available for display debugging.
 - USB NCM networking and SSH work at `192.168.137.133`.

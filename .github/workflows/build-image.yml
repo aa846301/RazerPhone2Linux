@@ -656,6 +656,10 @@ jobs:
           path: ${{ env.RAZER_WORKDIR }}/kernel/linux
           key: kernel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('config/kernel-source.env') }}
 
+      - name: Test charging policy
+        shell: bash
+        run: bash scripts/razer-charge-limits-selftest.sh
+
       - name: Compute kernel core cache identity
         id: kernel-core-key
         shell: bash
@@ -1252,7 +1256,7 @@ jobs:
         run: |
           set -euo pipefail
           out="$HOME/razorphone2linux/output/${RAZER_IMAGE_PROFILE}"
-          for opt in DRM_MSM DRM_PANEL_NOVATEK_NT36830; do
+          for opt in DRM_MSM DRM_PANEL_NOVATEK_NT36830 CHARGER_QCOM_SMB2 BATTERY_PMI8998_FG QCOM_SPMI_RRADC; do
             grep -q "^CONFIG_${opt}=y$" "$out/kernel.config" || {
               echo "ASSERT-FAIL: CONFIG_${opt} is not =y"
               exit 1
