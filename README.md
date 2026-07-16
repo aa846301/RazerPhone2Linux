@@ -154,6 +154,13 @@ not directly visible to the next tag. Let the matching `master` run complete
 before pushing its release tag; the tag run can then reuse kernel core,
 `ccache`, extracted firmware, and rootfs caches from the default branch.
 
+The `master` cache warm-up uses three independent ARM64 jobs in parallel:
+factory firmware extraction, kernel/DTB/modules, and a kernel-independent
+rootfs base. The rootfs base contains the distribution, packages, users and
+optional application profile; the release job later applies current firmware,
+modules, services and initramfs through `03-refresh-rootfs.sh`. A failure in
+firmware preparation therefore does not discard a successful kernel build.
+
 The YAML spells out the release recipe on GitHub's `ubuntu-24.04-arm` hosted
 runner: select the tag profile, import firmware, build the native-panel/GPU
 kernel, build the ARM64 rootfs, package `boot.img`, and upload one release zip

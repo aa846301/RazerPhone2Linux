@@ -35,7 +35,243 @@ permissions:
   contents: write
 
 jobs:
+  seed-firmware:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      RAZER_FIRMWARE_CACHE_VERSION: "1"
+      RAZER_FACTORY_ZIP_URL: ${{ secrets.RAZER_FACTORY_ZIP_URL || vars.RAZER_FACTORY_ZIP_URL }}
+      RAZER_FACTORY_ZIP_AUTH_HEADER: ${{ secrets.RAZER_FACTORY_ZIP_AUTH_HEADER }}
+      RAZER_FACTORY_ZIP: /home/runner/razorphone2linux/downloads/aura-p-release-3201-user-full.zip
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          lfs: true
+
+      - name: Compute extracted firmware cache key
+        id: firmware-cache-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RAZER_FACTORY_ZIP_URL}" || {
+            echo "ERROR: RAZER_FACTORY_ZIP_URL is required to seed firmware." >&2
+            exit 1
+          }
+          url_hash="$(printf '%s' "${RAZER_FACTORY_ZIP_URL}" | sha256sum | cut -d' ' -f1)"
+          echo "key=factory-firmware-${RUNNER_OS}-${RUNNER_ARCH}-v${RAZER_FIRMWARE_CACHE_VERSION}-${url_hash}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore extracted factory firmware cache
+        id: firmware-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            firmware/qcom/sdm845/Razer/aura
+            firmware/ath10k/WCN3990/hw1.0
+            firmware/qca
+          key: ${{ steps.firmware-cache-key.outputs.key }}
+
+      - name: Install firmware extraction tools
+        if: steps.firmware-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo bash scripts/ci-apt-install.sh \
+            7zip android-sdk-libsparse-utils e2fsprogs file mtools
+
+      - name: Download and extract factory firmware
+        if: steps.firmware-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "${RAZER_FACTORY_ZIP}")"
+          curl_args=(-L --fail --retry 3 --retry-all-errors)
+          if [ -n "${RAZER_FACTORY_ZIP_AUTH_HEADER}" ]; then
+            curl_args+=(-H "${RAZER_FACTORY_ZIP_AUTH_HEADER}")
+          fi
+          curl "${curl_args[@]}" -o "${RAZER_FACTORY_ZIP}" "${RAZER_FACTORY_ZIP_URL}"
+          bash scripts/extract-modem-firmware.sh "${RAZER_FACTORY_ZIP}"
+          rm -f "${RAZER_FACTORY_ZIP}"
+
+      - name: Validate extracted firmware
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in \
+            firmware/qcom/sdm845/Razer/aura/mba.mbn \
+            firmware/qcom/sdm845/Razer/aura/modem.mbn \
+            firmware/qca/crbtfw21.tlv \
+            firmware/qca/Razer/aura/crnv21.bin; do
+            test -s "$file" || { echo "ERROR: missing firmware: $file" >&2; exit 1; }
+          done
+
+      - name: Save extracted factory firmware cache
+        if: steps.firmware-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            firmware/qcom/sdm845/Razer/aura
+            firmware/ath10k/WCN3990/hw1.0
+            firmware/qca
+          key: ${{ steps.firmware-cache-key.outputs.key }}
+
+  seed-kernel:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      RAZER_IMAGE_PROFILE: base
+      RAZER_DISPLAY_NATIVE_PANEL: "1"
+      RAZER_SKIP_REFERENCE: "1"
+      RAZER_KERNEL_CORE_CACHE_VERSION: "2"
+      RAZER_CCACHE_CACHE_VERSION: "2"
+      RAZER_WORKDIR: /home/runner/razorphone2linux
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          lfs: true
+
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/.ghcup /usr/local/share/boost
+
+      - name: Install kernel build environment
+        run: |
+          sudo bash scripts/ci-apt-install.sh \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu build-essential \
+            bc bison flex libssl-dev libncurses-dev libelf-dev \
+            device-tree-compiler debootstrap qemu-user-static rsync git curl \
+            wget cpio lz4 ccache python3 python3-pip python3-git \
+            python3-libfdt python3-ply libgmp-dev libmpc-dev \
+            android-sdk-libsparse-utils u-boot-tools kmod 7zip zerofree
+
+      - name: Prepare pinned kernel
+        run: |
+          RAZER_SKIP_APT=1 RAZER_SKIP_REFERENCE=1 bash scripts/01-setup-environment.sh
+
+      - name: Test charging policy
+        run: bash scripts/razer-charge-limits-selftest.sh
+
+      - name: Compute kernel core cache identity
+        id: kernel-core-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          core_hash="$(bash scripts/kernel-core-cache-key.sh)"
+          echo "hash=${core_hash}" >> "$GITHUB_OUTPUT"
+          echo "key=kernel-core-${RUNNER_OS}-${RUNNER_ARCH}-${core_hash}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore kernel core artifact cache
+        id: kernel-core-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/Image.gz
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/modules_install
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/kernel.release
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/kernel.config
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/kernel.modules-fingerprint
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/kernel.core-key
+          key: ${{ steps.kernel-core-key.outputs.key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ steps.kernel-core-key.outputs.key }}-
+
+      - name: Restore compiler cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.RAZER_WORKDIR }}/cache/ccache
+          key: kernel-ccache-${{ runner.os }}-${{ runner.arch }}-v${{ env.RAZER_CCACHE_CACHE_VERSION }}-${{ steps.kernel-core-key.outputs.hash }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            kernel-ccache-${{ runner.os }}-${{ runner.arch }}-v${{ env.RAZER_CCACHE_CACHE_VERSION }}-${{ steps.kernel-core-key.outputs.hash }}-
+            kernel-ccache-${{ runner.os }}-${{ runner.arch }}-v${{ env.RAZER_CCACHE_CACHE_VERSION }}-
+
+      - name: Build kernel core and current DTB
+        id: kernel-build
+        run: bash scripts/02-build-kernel.sh
+
+      - name: Save kernel core artifact cache
+        if: steps.kernel-build.outputs.core-reused != '1'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/Image.gz
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/modules_install
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/kernel.release
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/kernel.config
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/kernel.modules-fingerprint
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/kernel.core-key
+          key: ${{ steps.kernel-core-key.outputs.key }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Save compiler cache
+        if: steps.kernel-build.outputs.core-reused != '1'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.RAZER_WORKDIR }}/cache/ccache
+          key: kernel-ccache-${{ runner.os }}-${{ runner.arch }}-v${{ env.RAZER_CCACHE_CACHE_VERSION }}-${{ steps.kernel-core-key.outputs.hash }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+  seed-rootfs-base:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      RAZER_IMAGE_PROFILE: base
+      RAZER_USERSPACE_PROFILE: none
+      RAZER_ROOTFS_CACHE_VERSION: "1"
+      RAZER_WORKDIR: /home/runner/razorphone2linux
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          lfs: true
+
+      - name: Compute reusable rootfs cache key
+        id: rootfs-cache-key
+        shell: bash
+        run: |
+          key="$(bash scripts/rootfs-cache-key.sh)"
+          echo "key=${key}" >> "$GITHUB_OUTPUT"
+          echo "Reusable rootfs cache key: ${key}"
+
+      - name: Restore reusable rootfs base cache
+        id: rootfs-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/rootfs.img
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/userspace.profile
+          key: ${{ steps.rootfs-cache-key.outputs.key }}
+
+      - name: Free runner disk space
+        if: steps.rootfs-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/.ghcup /usr/local/share/boost
+
+      - name: Install rootfs build environment
+        if: steps.rootfs-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo bash scripts/ci-apt-install.sh \
+            debootstrap qemu-user-static rsync curl wget cpio lz4 python3 \
+            android-sdk-libsparse-utils kmod 7zip zerofree e2fsprogs
+
+      - name: Build reusable rootfs base
+        if: steps.rootfs-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo --preserve-env=RAZER_WORKDIR,RAZER_IMAGE_PROFILE,RAZER_USERSPACE_PROFILE \
+            env RAZER_ROOTFS_BASE_ONLY=1 bash scripts/03-build-rootfs.sh
+
+      - name: Save reusable rootfs base cache
+        if: steps.rootfs-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/rootfs.img
+            ${{ env.RAZER_WORKDIR }}/output/${{ env.RAZER_IMAGE_PROFILE }}/userspace.profile
+          key: ${{ steps.rootfs-cache-key.outputs.key }}
+
   build:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 150
     env:
@@ -181,23 +417,8 @@ jobs:
               command -v "${tool}" >/dev/null 2>&1 || missing_tools=1
             done
             if [ "${missing_tools}" = "1" ]; then
-              for attempt in 1 2 3; do
-                if sudo apt-get -o Acquire::Retries=3 update &&
-                   sudo env DEBIAN_FRONTEND=noninteractive \
-                     apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
-                       7zip \
-                       android-sdk-libsparse-utils \
-                       e2fsprogs \
-                       mtools; then
-                  break
-                fi
-                if [ "${attempt}" = "3" ]; then
-                  echo "ERROR: firmware extraction tool installation failed after ${attempt} attempts." >&2
-                  exit 1
-                fi
-                echo "Firmware tool installation attempt ${attempt} failed; retrying..."
-                sleep 10
-              done
+              sudo bash scripts/ci-apt-install.sh \
+                7zip android-sdk-libsparse-utils e2fsprogs file mtools
             fi
           fi
 
@@ -498,8 +719,7 @@ jobs:
               echo "[1/5] Skipping apt dependency installation (RAZER_SKIP_APT=1)."
           else
               echo "[1/5] Installing build dependencies..."
-              sudo apt update
-              sudo apt install -y \
+              sudo bash scripts/ci-apt-install.sh \
                   gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
                   build-essential bc bison flex \
                   libssl-dev libncurses-dev libelf-dev \
@@ -511,7 +731,7 @@ jobs:
                   libgmp-dev libmpc-dev \
                   android-sdk-libsparse-utils \
                   u-boot-tools \
-                  kmod p7zip-full zerofree
+                  kmod 7zip zerofree
 
               # Install adb/fastboot
               if ! command -v fastboot &>/dev/null; then
@@ -1315,23 +1535,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rootfs_input_hash="$(
-            {
-              printf 'cache_version=%s\n' "${RAZER_ROOTFS_CACHE_VERSION}"
-              printf 'image_profile=%s\n' "${RAZER_IMAGE_PROFILE}"
-              printf 'userspace_profile=%s\n' "${RAZER_USERSPACE_PROFILE}"
-              printf 'ubuntu_mirror=%s\n' "${RAZER_UBUNTU_MIRROR:-https://ports.ubuntu.com/ubuntu-ports}"
-              git ls-files -s -- \
-                config/build.env \
-                config/userspace.env \
-                scripts/03-build-rootfs.sh \
-                rootfs-packages/arm64 \
-                rootfs-scripts/install-final-target.sh \
-                rootfs-scripts/kiosk-prototype \
-                "rootfs-profiles/${RAZER_USERSPACE_PROFILE}"
-            } | sha256sum | cut -d' ' -f1
-          )"
-          key="rootfs-${RUNNER_OS}-${RUNNER_ARCH}-${RAZER_IMAGE_PROFILE}-${RAZER_USERSPACE_PROFILE}-${rootfs_input_hash}"
+          key="$(bash scripts/rootfs-cache-key.sh)"
           echo "key=${key}" >> "$GITHUB_OUTPUT"
           echo "Reusable rootfs cache key: ${key}"
 

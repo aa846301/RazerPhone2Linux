@@ -43,6 +43,7 @@ ROOTFS_PACKAGES_DIR="${ROOTFS_PACKAGES_DIR:-$PROJECT_DIR/rootfs-packages/arm64}"
 ROOTFS_BINARIES_DIR="${ROOTFS_BINARIES_DIR:-$PROJECT_DIR/rootfs-binaries/arm64}"
 WIN_OUTPUT_DIR="$PROJECT_DIR/output/$IMAGE_PROFILE"
 OUTPUT_ROOTFS_IMG="$OUTPUT_DIR/rootfs.img"
+BASE_ONLY="${RAZER_ROOTFS_BASE_ONLY:-0}"
 
 mkdir -p "$OUTPUT_DIR" "$WIN_OUTPUT_DIR"
 
@@ -61,22 +62,25 @@ cleanup_mounts() {
 KERNEL_RELEASE_FILE="$OUTPUT_DIR/kernel.release"
 KERNEL_MODULES_FINGERPRINT_FILE="$OUTPUT_DIR/kernel.modules-fingerprint"
 ROOTFS_MODULES_FINGERPRINT_FILE="$OUTPUT_DIR/rootfs.modules-fingerprint"
-if [ -f "$KERNEL_RELEASE_FILE" ]; then
-    KERNEL_VERSION=$(tr -d '\r\n' < "$KERNEL_RELEASE_FILE")
-else
-    KERNEL_VERSION=$(ls "$OUTPUT_DIR/modules_install/lib/modules/" 2>/dev/null | head -1)
-fi
-if [ -z "$KERNEL_VERSION" ]; then
-    echo "ERROR: No kernel modules found in $OUTPUT_DIR/modules_install/"
-    echo "Please run 02-build-kernel.sh first."
-    exit 1
-fi
+KERNEL_VERSION="deferred"
+if [ "$BASE_ONLY" != "1" ]; then
+    if [ -f "$KERNEL_RELEASE_FILE" ]; then
+        KERNEL_VERSION=$(tr -d '\r\n' < "$KERNEL_RELEASE_FILE")
+    else
+        KERNEL_VERSION=$(ls "$OUTPUT_DIR/modules_install/lib/modules/" 2>/dev/null | head -1)
+    fi
+    if [ -z "$KERNEL_VERSION" ]; then
+        echo "ERROR: No kernel modules found in $OUTPUT_DIR/modules_install/"
+        echo "Please run 02-build-kernel.sh first."
+        exit 1
+    fi
 
-if [ ! -d "$OUTPUT_DIR/modules_install/lib/modules/$KERNEL_VERSION" ]; then
-    echo "ERROR: kernel.release says '$KERNEL_VERSION' but modules are missing:"
-    echo "  $OUTPUT_DIR/modules_install/lib/modules/$KERNEL_VERSION"
-    echo "Run 02-build-kernel.sh and then rebuild rootfs with the same output directory."
-    exit 1
+    if [ ! -d "$OUTPUT_DIR/modules_install/lib/modules/$KERNEL_VERSION" ]; then
+        echo "ERROR: kernel.release says '$KERNEL_VERSION' but modules are missing:"
+        echo "  $OUTPUT_DIR/modules_install/lib/modules/$KERNEL_VERSION"
+        echo "Run 02-build-kernel.sh and then rebuild rootfs with the same output directory."
+        exit 1
+    fi
 fi
 
 HOSTNAME="razer-aura"
@@ -101,6 +105,7 @@ echo "Profile:      $IMAGE_PROFILE"
 echo "Userspace:    $USERSPACE_PROFILE"
 echo "APT mirror:   $MIRROR"
 echo "Kernel:       $KERNEL_VERSION"
+echo "Base only:    $BASE_ONLY"
 echo "Image size:   ${ROOTFS_SIZE_GB}GB"
 echo "Hostname:     $HOSTNAME"
 echo "User:         $USERNAME"
@@ -471,8 +476,9 @@ else
 fi
 
 # -------------------------------------------------------
-# Step 6: Install kernel modules
+# Steps 6-7: Install kernel-dependent runtime content
 # -------------------------------------------------------
+if [ "$BASE_ONLY" != "1" ]; then
 echo "[6/10] Installing kernel modules (version $KERNEL_VERSION)..."
 rsync -av --progress \
     "$OUTPUT_DIR/modules_install/lib/modules/$KERNEL_VERSION" \
@@ -578,6 +584,10 @@ else
     rm -f "$ADRENO_DIR/a630_gmu.bin"
 fi
 
+else
+    echo "[6-7/10] Deferring modules, firmware, initramfs, and runtime overlay."
+fi
+
 # -------------------------------------------------------
 # Step 8/9: Optional final target userspace
 # -------------------------------------------------------
@@ -598,10 +608,14 @@ fi
 # Keep the full build and validation refresh on the same runtime overlay path.
 # This must run after firmware is installed so it can create firmware aliases
 # and enable tqftpserv on the first reproducible build.
-echo "[9/10] Applying runtime config overlay..."
-cp -f "$PROJECT_DIR/rootfs-scripts/apply-runtime-config.sh" "$CHROOT_DIR/tmp/apply-runtime-config.sh"
-chmod +x "$CHROOT_DIR/tmp/apply-runtime-config.sh"
-chroot "$CHROOT_DIR" /tmp/apply-runtime-config.sh
+if [ "$BASE_ONLY" != "1" ]; then
+    echo "[9/10] Applying runtime config overlay..."
+    cp -f "$PROJECT_DIR/rootfs-scripts/apply-runtime-config.sh" "$CHROOT_DIR/tmp/apply-runtime-config.sh"
+    chmod +x "$CHROOT_DIR/tmp/apply-runtime-config.sh"
+    chroot "$CHROOT_DIR" /tmp/apply-runtime-config.sh
+else
+    echo "[9/10] Runtime config overlay deferred to 03-refresh-rootfs.sh."
+fi
 
 # -------------------------------------------------------
 # Step 10: Cleanup and unmount
@@ -640,21 +654,24 @@ else
     echo "  WARNING: zerofree is not installed; rootfs-sparse.img may include stale ext4 free blocks."
 fi
 
-# Create Android sparse image for fastboot
-SPARSE_IMG="$OUTPUT_DIR/rootfs-sparse.img"
-img2simg "$ROOTFS_IMG" "$SPARSE_IMG"
 cp -f "$ROOTFS_IMG" "$OUTPUT_ROOTFS_IMG"
 
 mkdir -p "$WIN_OUTPUT_DIR"
 cp -f "$OUTPUT_ROOTFS_IMG" "$WIN_OUTPUT_DIR/rootfs.img"
-cp -f "$SPARSE_IMG" "$WIN_OUTPUT_DIR/rootfs-sparse.img"
-cp -f "$OUTPUT_DIR/rootfs.kernel-release" "$WIN_OUTPUT_DIR/rootfs.kernel-release"
-cp -f "$ROOTFS_MODULES_FINGERPRINT_FILE" "$WIN_OUTPUT_DIR/rootfs.modules-fingerprint"
 cp -f "$OUTPUT_DIR/userspace.profile" "$WIN_OUTPUT_DIR/userspace.profile"
-cp -f "$OUTPUT_DIR/initrd.img-$KERNEL_VERSION" "$WIN_OUTPUT_DIR/initrd.img-$KERNEL_VERSION"
-cp -f "$OUTPUT_DIR/initrd.img" "$WIN_OUTPUT_DIR/initrd.img"
-if [ -f "$KERNEL_RELEASE_FILE" ]; then
-    cp -f "$KERNEL_RELEASE_FILE" "$WIN_OUTPUT_DIR/kernel.release"
+if [ "$BASE_ONLY" != "1" ]; then
+    # Create the flashable sparse image only after modules and runtime content
+    # have been applied. Base-only CI jobs cache just the reusable raw image.
+    SPARSE_IMG="$OUTPUT_DIR/rootfs-sparse.img"
+    img2simg "$ROOTFS_IMG" "$SPARSE_IMG"
+    cp -f "$SPARSE_IMG" "$WIN_OUTPUT_DIR/rootfs-sparse.img"
+    cp -f "$OUTPUT_DIR/rootfs.kernel-release" "$WIN_OUTPUT_DIR/rootfs.kernel-release"
+    cp -f "$ROOTFS_MODULES_FINGERPRINT_FILE" "$WIN_OUTPUT_DIR/rootfs.modules-fingerprint"
+    cp -f "$OUTPUT_DIR/initrd.img-$KERNEL_VERSION" "$WIN_OUTPUT_DIR/initrd.img-$KERNEL_VERSION"
+    cp -f "$OUTPUT_DIR/initrd.img" "$WIN_OUTPUT_DIR/initrd.img"
+    if [ -f "$KERNEL_RELEASE_FILE" ]; then
+        cp -f "$KERNEL_RELEASE_FILE" "$WIN_OUTPUT_DIR/kernel.release"
+    fi
 fi
 
 echo ""
@@ -664,7 +681,11 @@ echo "========================================"
 echo ""
 echo "Outputs:"
 echo "  Raw image:    $OUTPUT_ROOTFS_IMG"
-echo "  Sparse image: $SPARSE_IMG"
+if [ "$BASE_ONLY" = "1" ]; then
+    echo "  Finalization: deferred to scripts/03-refresh-rootfs.sh"
+else
+    echo "  Sparse image: $SPARSE_IMG"
+fi
 echo ""
 echo "Configuration:"
 echo "  User:     $USERNAME / $USER_PASSWORD"

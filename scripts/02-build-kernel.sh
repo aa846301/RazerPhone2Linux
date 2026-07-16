@@ -442,6 +442,9 @@ else
     echo "  Kernel core cache rejected: $CORE_CACHE_REASON."
     echo "  Full build required."
 fi
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    echo "core-reused=$REUSE_KERNEL_CORE" >> "$GITHUB_OUTPUT"
+fi
 
 # -------------------------------------------------------
 # Step 5: Build kernel, DTBs, and modules

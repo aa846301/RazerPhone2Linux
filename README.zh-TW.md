@@ -147,6 +147,12 @@ boot packager 會拒絕產生 `boot.img`。
 前，應先讓相同 commit 的 `master` run 完成；tag run 才能從預設分支復用
 kernel core、`ccache`、已抽取 firmware 與 rootfs cache。
 
+`master` 暖 cache 時會同時使用三個獨立 ARM64 job：工廠 firmware 抽取、
+kernel/DTB/modules，以及不依賴 kernel 的 rootfs base。rootfs base 只包含
+distribution、套件、帳號與可選 application profile；release job 最後再由
+`03-refresh-rootfs.sh` 套用當次 firmware、modules、services 與 initramfs。
+因此 firmware 前置失敗時，不會連已成功完成的 kernel build 一起丟掉。
+
 YAML 會直接列出 GitHub `ubuntu-24.04-arm` hosted runner 上的 release
 recipe：選 tag profile、匯入韌體、建 native-panel/GPU kernel、建 ARM64
 rootfs、封裝 `boot.img`，並上傳只包含可刷入映像的 release zip：
