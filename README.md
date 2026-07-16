@@ -20,7 +20,10 @@ charge-limited, and ready for users to install their own software.
   external input above 40%. A charge cycle starts at 40%, remains latched, and
   stops at 80%. The DTS keeps a conservative 2 A charge limit.
 - The base image blanks the panel after boot on normal images, and keeps a
-  console mode available for display debugging.
+  console mode available for display debugging. Orderly shutdown restores the
+  real tty/kernel log before hardware teardown.
+- Qualcomm A/B boot completion is marked through `qbootctl`, preventing normal
+  reboot cycles from exhausting the active slot retry counter.
 - USB NCM networking and SSH work at `192.168.137.133`.
 - WiFi works through MSS/WLFW, `rmtfs`, userspace `pd-mapper`, patched
   `tqftpserv`, Razer FIH NV sharing, and the ath10k host-capability quirk.
@@ -32,6 +35,7 @@ pages. Checked items have been validated on hardware; partial features are
 split so the remaining work stays visible.
 
 - [x] Booting and fastboot flashing
+- [x] Qualcomm A/B boot-success marking
 - [x] Internal UFS storage and rootfs
 - [x] Native dual-DSI/DSC display and touchscreen
 - [x] Panel blanking and backlight off after boot

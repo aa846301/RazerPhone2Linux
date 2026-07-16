@@ -1,0 +1,13 @@
+[Unit]
+Description=Prepare display, WiFi, and UFS for orderly shutdown
+After=razer-modem-stop.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/local/sbin/razer-shutdown-prepare
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

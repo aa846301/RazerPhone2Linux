@@ -58,6 +58,15 @@ fi
 systemctl enable NetworkManager 2>/dev/null || true
 systemctl enable bluetooth.service 2>/dev/null || true
 
+# Qualcomm A/B bootloaders decrement the current slot retry counter until
+# userspace marks a completed boot as successful. Without this service, seven
+# ordinary Linux boots eventually make the active slot unbootable.
+if [ ! -x /usr/bin/qbootctl ] || [ ! -f /usr/lib/systemd/system/qbootctl.service ]; then
+    echo "ERROR: qbootctl is missing; A/B slot retry counters would not be reset" >&2
+    exit 1
+fi
+systemctl enable qbootctl.service
+
 cat > /etc/systemd/system/razer-wifi-ready.service <<'WIFI_READY_EOF'
 [Unit]
 Description=Wait for Razer Phone 2 WiFi before network-dependent services
@@ -214,6 +223,7 @@ TimeoutStopSec=20
 WantedBy=multi-user.target
 MODEM_STOP_EOF
 systemctl enable razer-modem-stop.service 2>/dev/null || true
+systemctl enable razer-shutdown-prepare.service 2>/dev/null || true
 
 rm -f /etc/modprobe.d/razer-late-modem-test.conf
 

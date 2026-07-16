@@ -75,6 +75,7 @@ if ($keyLoginExitCode -ne 0) {
 & scp @sshOptions `
     (Join-Path $experimentDir "razer-control-panel.py") `
     (Join-Path $experimentDir "razer-control-panel.service") `
+    (Join-Path $experimentDir "razer-shutdown-console.sh") `
     $kmsBinary `
     "${target}:/tmp/"
 if ($LASTEXITCODE -ne 0) {
@@ -87,6 +88,7 @@ $remote = @"
 password=`$(printf '%s' '$encodedPassword' | base64 -d)
 printf '%s' "`$password" | sudo -S install -m 0755 /tmp/razer-control-panel.py /usr/local/sbin/razer-control-panel
 printf '%s' "`$password" | sudo -S install -m 0644 /tmp/razer-control-panel.service /etc/systemd/system/razer-control-panel.service
+printf '%s' "`$password" | sudo -S install -m 0755 /tmp/razer-shutdown-console.sh /usr/local/sbin/razer-shutdown-console
 printf '%s' "`$password" | sudo -S install -m 0755 /tmp/razer-kms-present-arm64 /usr/local/sbin/razer-kms-present
 printf '%s' "`$password" | sudo -S systemctl disable --now razer-panel-idle-blank.service
 printf '%s' "`$password" | sudo -S systemctl disable --now getty@tty1.service
@@ -95,6 +97,7 @@ printf '%s' "`$password" | sudo -S systemctl enable razer-control-panel.service
 printf '%s' "`$password" | sudo -S systemctl restart razer-control-panel.service
 systemctl --no-pager --full status razer-control-panel.service
 "@
+$remote = $remote.Replace("`r`n", "`n")
 
 & ssh @sshOptions $target $remote
 if ($LASTEXITCODE -ne 0) {

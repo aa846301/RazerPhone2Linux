@@ -8,6 +8,7 @@ ConditionPathExists=/dev/input/event0
 [Service]
 Type=simple
 ExecStart=/usr/local/sbin/razer-control-panel
+ExecStop=/usr/local/sbin/razer-shutdown-console
 Restart=on-failure
 RestartSec=2
 Environment=RAZER_PANEL_IDLE_SECONDS=60

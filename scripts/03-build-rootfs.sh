@@ -241,6 +241,12 @@ install -D -m 0755 \
 install -D -m 0644 \
     "$PROJECT_DIR/rootfs-scripts/razer-panel-idle-blank.service" \
     "$CHROOT_DIR/etc/systemd/system/razer-panel-idle-blank.service"
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/razer-shutdown-prepare.sh" \
+    "$CHROOT_DIR/usr/local/sbin/razer-shutdown-prepare"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-shutdown-prepare.service" \
+    "$CHROOT_DIR/etc/systemd/system/razer-shutdown-prepare.service"
 mkdir -p "$CHROOT_DIR/etc/systemd/system/basic.target.wants"
 ln -sf ../razer-quiet-console.service \
     "$CHROOT_DIR/etc/systemd/system/basic.target.wants/razer-quiet-console.service"
@@ -249,9 +255,15 @@ ln -sf ../razer-charge-limits.service \
     "$CHROOT_DIR/etc/systemd/system/multi-user.target.wants/razer-charge-limits.service"
 ln -sf ../razer-panel-idle-blank.service \
     "$CHROOT_DIR/etc/systemd/system/multi-user.target.wants/razer-panel-idle-blank.service"
+ln -sf ../razer-shutdown-prepare.service \
+    "$CHROOT_DIR/etc/systemd/system/multi-user.target.wants/razer-shutdown-prepare.service"
 if [ -f "$ROOTFS_PACKAGES_DIR/tqftpserv_1.0-5_arm64.deb" ]; then
     cp -f "$ROOTFS_PACKAGES_DIR/tqftpserv_1.0-5_arm64.deb" \
         "$CHROOT_DIR/tmp/tqftpserv_1.0-5_arm64.deb"
+fi
+if [ -f "$ROOTFS_PACKAGES_DIR/qbootctl_0.2.2-1_arm64.deb" ]; then
+    cp -f "$ROOTFS_PACKAGES_DIR/qbootctl_0.2.2-1_arm64.deb" \
+        "$CHROOT_DIR/tmp/qbootctl_0.2.2-1_arm64.deb"
 fi
 if [ -f "$ROOTFS_BINARIES_DIR/rmtfs-razer-test" ]; then
     install -D -m 0755 "$ROOTFS_BINARIES_DIR/rmtfs-razer-test" \
@@ -354,6 +366,13 @@ if [ -f /tmp/tqftpserv_1.0-5_arm64.deb ]; then
     rm -f /tmp/tqftpserv_1.0-5_arm64.deb
 else
     echo "WARNING: tqftpserv package missing from rootfs package overlay"
+fi
+if [ -f /tmp/qbootctl_0.2.2-1_arm64.deb ]; then
+    apt install -y /tmp/qbootctl_0.2.2-1_arm64.deb
+    rm -f /tmp/qbootctl_0.2.2-1_arm64.deb
+else
+    echo "ERROR: qbootctl package missing from rootfs package overlay" >&2
+    exit 1
 fi
 
 # Enable NetworkManager

@@ -150,6 +150,12 @@ install -D -m 0755 \
 install -D -m 0644 \
     "$PROJECT_DIR/rootfs-scripts/razer-panel-idle-blank.service" \
     "$MOUNT_DIR/etc/systemd/system/razer-panel-idle-blank.service"
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/razer-shutdown-prepare.sh" \
+    "$MOUNT_DIR/usr/local/sbin/razer-shutdown-prepare"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-shutdown-prepare.service" \
+    "$MOUNT_DIR/etc/systemd/system/razer-shutdown-prepare.service"
 mkdir -p "$MOUNT_DIR/etc/systemd/system/basic.target.wants"
 ln -sf ../razer-quiet-console.service \
     "$MOUNT_DIR/etc/systemd/system/basic.target.wants/razer-quiet-console.service"
@@ -158,6 +164,8 @@ ln -sf ../razer-charge-limits.service \
     "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/razer-charge-limits.service"
 ln -sf ../razer-panel-idle-blank.service \
     "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/razer-panel-idle-blank.service"
+ln -sf ../razer-shutdown-prepare.service \
+    "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/razer-shutdown-prepare.service"
 install -D -m 0755 \
     "$PROJECT_DIR/rootfs-scripts/razer-panel-colortest.py" \
     "$MOUNT_DIR/usr/local/sbin/razer-panel-colortest"
@@ -201,6 +209,12 @@ if [ -f "$ROOTFS_PACKAGES_DIR/tqftpserv_1.0-5_arm64.deb" ]; then
     dpkg-deb -x "$ROOTFS_PACKAGES_DIR/tqftpserv_1.0-5_arm64.deb" "$MOUNT_DIR"
 else
     echo "  WARNING: tqftpserv package missing from $ROOTFS_PACKAGES_DIR"
+fi
+if [ -f "$ROOTFS_PACKAGES_DIR/qbootctl_0.2.2-1_arm64.deb" ]; then
+    dpkg-deb -x "$ROOTFS_PACKAGES_DIR/qbootctl_0.2.2-1_arm64.deb" "$MOUNT_DIR"
+else
+    echo "  ERROR: qbootctl package missing from $ROOTFS_PACKAGES_DIR" >&2
+    exit 1
 fi
 
 echo "  Installing repo-controlled ARM64 binaries..."
