@@ -23,6 +23,13 @@ point: it installs current firmware and modules into the rootfs base, applies
 services/runtime configuration, regenerates initramfs and sparse rootfs, and
 then `04-make-boot-image.sh` packages the boot image.
 
+The same join/build job also runs after all three seed jobs succeed on
+`master`. This is required: caches are not considered ready merely because
+their individual producers passed. The master build must prove that the cached
+kernel, firmware, and rootfs base assemble into one internally consistent
+image. Master uploads a validation artifact; tags additionally publish the
+GitHub Release.
+
 ## What the Action does
 
 - Selects `none`, `ha`, or `3dprinter` from the release tag suffix.

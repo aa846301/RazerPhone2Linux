@@ -152,6 +152,9 @@ kernel/DTB/modules，以及不依賴 kernel 的 rootfs base。rootfs base 只包
 distribution、套件、帳號與可選 application profile；release job 最後再由
 `03-refresh-rootfs.sh` 套用當次 firmware、modules、services 與 initramfs。
 因此 firmware 前置失敗時，不會連已成功完成的 kernel build 一起丟掉。
+三個 seed job 全部成功後，正常的 `build` job 必須在 `master` 還原這些 cache，
+並組裝一份完整驗證映像。只有 tag build 會把這條已驗證流程正式發佈成
+GitHub Release。
 
 YAML 會直接列出 GitHub `ubuntu-24.04-arm` hosted runner 上的 release
 recipe：選 tag profile、匯入韌體、建 native-panel/GPU kernel、建 ARM64

@@ -160,6 +160,9 @@ rootfs base. The rootfs base contains the distribution, packages, users and
 optional application profile; the release job later applies current firmware,
 modules, services and initramfs through `03-refresh-rootfs.sh`. A failure in
 firmware preparation therefore does not discard a successful kernel build.
+After all three seed jobs succeed, the normal `build` job must restore their
+caches and assemble a complete validation image on `master`. Only a tag build
+publishes that already-validated pipeline as a GitHub Release.
 
 The YAML spells out the release recipe on GitHub's `ubuntu-24.04-arm` hosted
 runner: select the tag profile, import firmware, build the native-panel/GPU
