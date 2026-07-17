@@ -1,4 +1,5 @@
 param(
+    [string]$Distro = "Ubuntu-24.04",
     [string]$HostName = "192.168.137.133",
     [string]$UserName = "klipper",
     [string]$IdentityFile = "C:\tmp\razer_usb_ed25519",
@@ -22,7 +23,7 @@ function ConvertTo-WslPath([string]$Path) {
 
 $kmsSourceWsl = ConvertTo-WslPath $kmsSource
 $kmsBinaryWsl = ConvertTo-WslPath $kmsBinary
-& wsl.exe -- aarch64-linux-gnu-gcc -O2 -Wall -Wextra `
+& wsl.exe -d $Distro --exec aarch64-linux-gnu-gcc -O2 -Wall -Wextra `
     -I /usr/include/drm -o $kmsBinaryWsl $kmsSourceWsl
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to cross-compile the DRM/KMS presenter"
@@ -30,10 +31,18 @@ if ($LASTEXITCODE -ne 0) {
 
 $cameraSourceWsl = ConvertTo-WslPath $cameraSource
 $cameraBinaryWsl = ConvertTo-WslPath $cameraBinary
-& wsl.exe -- aarch64-linux-gnu-gcc -O2 -Wall -Wextra `
+& wsl.exe -d $Distro --exec aarch64-linux-gnu-gcc -O2 -Wall -Wextra `
     -o $cameraBinaryWsl $cameraSourceWsl
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to cross-compile the camera preview helper"
+}
+
+if (!(Test-Path -LiteralPath $IdentityFile)) {
+    $defaultIdentity = Join-Path $env:USERPROFILE ".ssh\id_ed25519"
+    if (Test-Path -LiteralPath $defaultIdentity) {
+        Write-Output "Requested identity is missing; using $defaultIdentity"
+        $IdentityFile = $defaultIdentity
+    }
 }
 
 $sshOptions = @(

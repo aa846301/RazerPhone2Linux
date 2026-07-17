@@ -1720,15 +1720,10 @@ index 000000000000..c450faa75e84
 +	struct s5k3h7 *s5k3h7 = to_s5k3h7(sd);
 +	int ret;
 +
-+	/* Match the factory Qualcomm power sequence: I/O, analog, digital. */
-+	ret = regulator_enable(s5k3h7->supplies[2].consumer);
-+	if (ret)
-+		return ret;
-+	usleep_range(1000, 1500);
-+
++	/* Factory CamX sequence: VANA, VDIG, VIO, MCLK, RESET. */
 +	ret = regulator_enable(s5k3h7->supplies[0].consumer);
 +	if (ret)
-+		goto disable_vddio;
++		return ret;
 +	usleep_range(1000, 1500);
 +
 +	ret = regulator_enable(s5k3h7->supplies[1].consumer);
@@ -1736,9 +1731,13 @@ index 000000000000..c450faa75e84
 +		goto disable_vdda;
 +	usleep_range(1000, 1500);
 +
-+	ret = clk_prepare_enable(s5k3h7->mclk);
++	ret = regulator_enable(s5k3h7->supplies[2].consumer);
 +	if (ret)
 +		goto disable_vddd;
++
++	ret = clk_prepare_enable(s5k3h7->mclk);
++	if (ret)
++		goto disable_vddio;
 +	usleep_range(1000, 1500);
 +
 +	gpiod_set_value_cansleep(s5k3h7->reset_gpio, 0);
@@ -1746,12 +1745,12 @@ index 000000000000..c450faa75e84
 +
 +	return 0;
 +
++disable_vddio:
++	regulator_disable(s5k3h7->supplies[2].consumer);
 +disable_vddd:
 +	regulator_disable(s5k3h7->supplies[1].consumer);
 +disable_vdda:
 +	regulator_disable(s5k3h7->supplies[0].consumer);
-+disable_vddio:
-+	regulator_disable(s5k3h7->supplies[2].consumer);
 +
 +	return ret;
 +}
@@ -1761,13 +1760,15 @@ index 000000000000..c450faa75e84
 +	struct v4l2_subdev *sd = dev_get_drvdata(dev);
 +	struct s5k3h7 *s5k3h7 = to_s5k3h7(sd);
 +
-+	gpiod_set_value_cansleep(s5k3h7->reset_gpio, 1);
-+
 +	clk_disable_unprepare(s5k3h7->mclk);
++	usleep_range(1000, 1500);
 +
++	gpiod_set_value_cansleep(s5k3h7->reset_gpio, 1);
++	usleep_range(1000, 1500);
++
++	regulator_disable(s5k3h7->supplies[2].consumer);
 +	regulator_disable(s5k3h7->supplies[1].consumer);
 +	regulator_disable(s5k3h7->supplies[0].consumer);
-+	regulator_disable(s5k3h7->supplies[2].consumer);
 +
 +	return 0;
 +}

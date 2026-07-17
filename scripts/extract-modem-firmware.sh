@@ -11,6 +11,7 @@ SOURCE="${1:-$DEFAULT_MODEM_IMG}"
 DEST_DIR="$PROJECT_DIR/firmware/qcom/sdm845/Razer/aura"
 ATH10K_DIR="$PROJECT_DIR/firmware/ath10k/WCN3990/hw1.0"
 QCA_DIR="$PROJECT_DIR/firmware/qca"
+TFA_CNT="$PROJECT_DIR/firmware/tfa98xx.cnt"
 FACTORY_ZIP=""
 
 if ! command -v 7z >/dev/null 2>&1; then
@@ -197,6 +198,52 @@ if [ -n "$FACTORY_ZIP" ]; then
     install -D -m 0644 "$tlv_src" "$QCA_DIR/crbtfw21.tlv"
     install -D -m 0644 "$nvm_src" "$QCA_DIR/crnv21.bin"
     install -D -m 0644 "$nvm_src" "$QCA_DIR/Razer/aura/crnv21.bin"
+
+    vendor_entry="$({
+        7z l -slt "$FACTORY_ZIP" |
+            awk -F' = ' '/^Path = / {
+                path = $2
+                gsub(/\\/, "/", path)
+                if (path ~ /(^|\/)vendor\.img$/) {
+                    print path
+                    exit
+                }
+            }'
+    })"
+    if [ -z "$vendor_entry" ]; then
+        echo "ERROR: vendor.img was not found inside $FACTORY_ZIP"
+        exit 1
+    fi
+
+    mkdir -p "$tmpdir/vendor"
+    7z e -y -o"$tmpdir/vendor" "$FACTORY_ZIP" "$vendor_entry" >/dev/null
+    vendor_img="$tmpdir/vendor/vendor.img"
+    vendor_raw="$tmpdir/vendor.raw.img"
+    image_type="$(file -b "$vendor_img")"
+    if [[ "$image_type" == *"Android sparse image"* ]]; then
+        simg2img "$vendor_img" "$vendor_raw"
+    else
+        cp -f "$vendor_img" "$vendor_raw"
+    fi
+
+    raw_type="$(file -b "$vendor_raw")"
+    echo "Vendor firmware image type: $raw_type"
+    if [[ "$raw_type" != *"ext2 filesystem"* ]] &&
+            [[ "$raw_type" != *"ext3 filesystem"* ]] &&
+            [[ "$raw_type" != *"ext4 filesystem"* ]]; then
+        echo "ERROR: unsupported vendor.img filesystem: $raw_type"
+        exit 1
+    fi
+
+    debugfs -R "dump /firmware/tfa98xx.cnt $tmpdir/tfa98xx.cnt" "$vendor_raw"
+    if [ ! -s "$tmpdir/tfa98xx.cnt" ]; then
+        echo "ERROR: /firmware/tfa98xx.cnt was not found in vendor.img"
+        exit 1
+    fi
+    install -D -m 0644 "$tmpdir/tfa98xx.cnt" "$TFA_CNT"
+    echo "  tfa98xx.cnt: $(stat -c %s "$TFA_CNT") bytes"
+else
+    echo "WARNING: a factory ZIP is required to extract tfa98xx.cnt"
 fi
 
 echo "Firmware output:"
@@ -204,4 +251,7 @@ find "$DEST_DIR" -maxdepth 1 -type f -printf '  %f %s bytes\n' | sort
 find "$ATH10K_DIR" -maxdepth 1 -type f -printf '  ath10k/%f %s bytes\n' | sort
 if [ -d "$QCA_DIR" ]; then
     find "$QCA_DIR" -type f -printf '  qca/%P %s bytes\n' | sort
+fi
+if [ -f "$TFA_CNT" ]; then
+    find "$TFA_CNT" -maxdepth 0 -type f -printf '  %f %s bytes\n'
 fi

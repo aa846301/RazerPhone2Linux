@@ -26,7 +26,7 @@ case "$camera" in
 	rear)
 		sensor=$(printf '%s\n' "$topology" | sed -n 's/.*entity [0-9][0-9]*: \(imx363 [^ (]*\).*/\1/p' | head -n1)
 		csiphy=msm_csiphy0
-		format=SRGGB10
+		format=SRGGB10_1X10
 		bayer=RGGB
 		mirror=0
 		fourcc=pRAA
@@ -34,7 +34,7 @@ case "$camera" in
 	front)
 		sensor=$(printf '%s\n' "$topology" | sed -n 's/.*entity [0-9][0-9]*: \(s5k3h7 [^ (]*\).*/\1/p' | head -n1)
 		csiphy=msm_csiphy2
-		format=SGRBG10
+		format=SGRBG10_1X10
 		bayer=GRBG
 		mirror=1
 		fourcc=pGAA

@@ -390,6 +390,32 @@
 	 * domain to boot so modem root_pd can resolve early dependencies.
 	 */
 	status = "okay";
+
+	/*
+	 * Razer's stock ADSP image exposes APR over GLINK, but its service
+	 * registry does not publish msm/adsp/audio_pd. Register the audio APR
+	 * children as soon as the edge appears instead of waiting forever for a
+	 * protection-domain notification that this firmware cannot send.
+	 */
+	glink-edge {
+		apr {
+			service@3 {
+				/delete-property/ qcom,protection-domain;
+			};
+		};
+	};
+};
+
+&q6afe {
+	/delete-property/ qcom,protection-domain;
+};
+
+&q6asm {
+	/delete-property/ qcom,protection-domain;
+};
+
+&q6adm {
+	/delete-property/ qcom,protection-domain;
 };
 
 &cdsp_pas {
@@ -1115,16 +1141,17 @@
  * ==========================================================================
  * PMI8998 LRA Haptics
  * ==========================================================================
- * Razer's downstream PMI8998 node uses direct play, a 3.2 V maximum and a
- * 6667 us sample period.  Mainline's buffer mode exposes the same actuator
- * through the standard EV_FF/FF_RUMBLE interface; keep the factory resonant
- * period and let the input driver scale the requested magnitude.
+ * Razer's downstream PMI8998 node uses direct play, a 1.3 V maximum, the
+ * 800 mA current limit and a 6667 us sample period. Mainline's buffer mode
+ * exposes the same actuator through the standard EV_FF/FF_RUMBLE interface.
  */
 &pmi8998_haptics {
 	status = "okay";
 	qcom,actuator-type = <HAP_TYPE_LRA>;
 	qcom,wave-shape = <HAP_WAVE_SINE>;
 	qcom,play-mode = <HAP_PLAY_BUFFER>;
+	qcom,vmax-mv = <1300>;
+	qcom,current-limit-milliamp = <800>;
 	qcom,wave-play-rate-us = <6667>;
 	qcom,brake-pattern = <0x3 0x3 0x2 0x1>;
 };
@@ -1137,7 +1164,7 @@
 &q6afedai {
 	dai@22 {
 		reg = <QUATERNARY_MI2S_RX>;
-		qcom,sd-lines = <1>;
+		qcom,sd-lines = <0 1>;
 	};
 
 	dai@23 {
@@ -1175,6 +1202,29 @@
 
 &qupv3_id_1 {
 	status = "okay";
+};
+
+/*
+ * The SMR7 RC2 audio DTS identifies two NXP TFA9912 smart amplifiers on
+ * QUPv3 SE5. Their factory container is installed as tfa98xx.cnt.
+ */
+&i2c5 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	tfa_left: amplifier@34 {
+		compatible = "tfa,tfa9912";
+		reg = <0x34>;
+		#sound-dai-cells = <0>;
+		sound-name-prefix = "Left";
+	};
+
+	tfa_right: amplifier@35 {
+		compatible = "tfa,tfa9912";
+		reg = <0x35>;
+		#sound-dai-cells = <0>;
+		sound-name-prefix = "Right";
+	};
 };
 
 &qup_i2c14_default {
@@ -1270,6 +1320,10 @@
 
 		platform {
 			sound-dai = <&q6routing>;
+		};
+
+		codec {
+			sound-dai = <&tfa_left>, <&tfa_right>;
 		};
 	};
 

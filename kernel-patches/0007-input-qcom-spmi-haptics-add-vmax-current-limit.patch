@@ -1,0 +1,76 @@
+diff --git a/Documentation/devicetree/bindings/input/qcom,spmi-haptics.yaml b/Documentation/devicetree/bindings/input/qcom,spmi-haptics.yaml
+index 8ef9b4ec3a071..3fcf24856d185 100644
+--- a/Documentation/devicetree/bindings/input/qcom,spmi-haptics.yaml
++++ b/Documentation/devicetree/bindings/input/qcom,spmi-haptics.yaml
+@@ -78,6 +78,19 @@ properties:
+     minimum: 0
+     maximum: 20475
+ 
++  qcom,vmax-mv:
++    description: Maximum drive voltage used at full rumble magnitude.
++    $ref: /schemas/types.yaml#/definitions/uint32
++    minimum: 116
++    maximum: 3596
++    default: 3596
++
++  qcom,current-limit-milliamp:
++    description: Haptics output current limit.
++    $ref: /schemas/types.yaml#/definitions/uint32
++    enum: [ 400, 800 ]
++    default: 400
++
+   qcom,brake-pattern:
+     minItems: 4
+     maxItems: 4
+diff --git a/drivers/input/misc/qcom-spmi-haptics.c b/drivers/input/misc/qcom-spmi-haptics.c
+index 1d453a4a61741..c2bcb1fca77b7 100644
+--- a/drivers/input/misc/qcom-spmi-haptics.c
++++ b/drivers/input/misc/qcom-spmi-haptics.c
+@@ -186,6 +186,7 @@ struct spmi_haptics {
+ 	u8 play_mode;
+ 	int magnitude;
+ 	u32 vmax;
++	u32 vmax_max;
+ 	u32 current_limit;
+ 	u32 play_wave_rate;
+ 
+@@ -761,8 +762,8 @@ static int spmi_haptics_play_effect(struct input_dev *dev, void *data,
+ 
+ 	atomic_set(&haptics->active, 1);
+ 
+-	haptics->vmax = ((HAP_VMAX_MAX_MV - HAP_VMAX_MIN_MV) * haptics->magnitude) / 100 +
+-					HAP_VMAX_MIN_MV;
++	haptics->vmax = ((haptics->vmax_max - HAP_VMAX_MIN_MV) *
++			  haptics->magnitude) / 255 + HAP_VMAX_MIN_MV;
+ 
+ 	dev_dbg(haptics->dev, "%s: magnitude: %d, vmax: %d", __func__,
+ 		haptics->magnitude, haptics->vmax);
+@@ -875,7 +876,28 @@ static int spmi_haptics_probe(struct platform_device *pdev)
+ 		goto register_fail;
+ 	}
+ 
++	haptics->vmax_max = HAP_VMAX_MAX_MV;
++	ret = of_property_read_u32(node, "qcom,vmax-mv", &val);
++	if (!ret)
++		haptics->vmax_max = clamp_t(u32, val, HAP_VMAX_MIN_MV,
++					       HAP_VMAX_MAX_MV);
++	else if (ret != -EINVAL)
++		goto register_fail;
++	haptics->vmax = haptics->vmax_max;
++
+ 	haptics->current_limit = HAP_ILIM_400_MA;
++	ret = of_property_read_u32(node, "qcom,current-limit-milliamp", &val);
++	if (!ret) {
++		if (val == 800)
++			haptics->current_limit = HAP_ILIM_800_MA;
++		else if (val != 400) {
++			dev_err(&pdev->dev, "unsupported current limit: %u mA\n", val);
++			ret = -EINVAL;
++			goto register_fail;
++		}
++	} else if (ret != -EINVAL) {
++		goto register_fail;
++	}
+ 
+ 	for (i = 0; i < HAP_WAVE_SAMP_LEN; i++)
+ 		haptics->wave_samp[i] = HAP_WF_SAMP_MAX;

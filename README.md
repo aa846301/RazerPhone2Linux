@@ -30,9 +30,9 @@ charge-limited, and ready for users to install their own software.
 - Front S5K3H7 and rear IMX363 RAW10 preview paths are implemented in the
   experimental control panel, but still require on-device validation and do
   not yet provide a complete camera stack (3A, still capture, or recording).
-- PMI8998 LRA haptics and the WCD9340/SLIMbus sound card are enabled for the
-  next hardware-validation build. They remain unchecked below until tested on
-  a phone.
+- PMI8998 LRA haptics now use the factory 1300 mV/800 mA limits. Audio connects
+  WCD9340/SLIMbus, both factory TFA9912 amplifiers, and `tfa98xx.cnt`. These
+  remain unchecked below until the next image is tested on a phone.
 
 ## Hardware Support Checklist
 

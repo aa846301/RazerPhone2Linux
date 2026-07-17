@@ -40,7 +40,7 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     env:
-      RAZER_FIRMWARE_CACHE_VERSION: "1"
+      RAZER_FIRMWARE_CACHE_VERSION: "2"
       RAZER_FACTORY_ZIP_URL: ${{ secrets.RAZER_FACTORY_ZIP_URL || vars.RAZER_FACTORY_ZIP_URL }}
       RAZER_FACTORY_ZIP_AUTH_HEADER: ${{ secrets.RAZER_FACTORY_ZIP_AUTH_HEADER }}
       RAZER_FACTORY_ZIP: /home/runner/razorphone2linux/downloads/aura-p-release-3201-user-full.zip
@@ -70,6 +70,7 @@ jobs:
             firmware/qcom/sdm845/Razer/aura
             firmware/ath10k/WCN3990/hw1.0
             firmware/qca
+            firmware/tfa98xx.cnt
           key: ${{ steps.firmware-cache-key.outputs.key }}
 
       - name: Install firmware extraction tools
@@ -100,7 +101,8 @@ jobs:
             firmware/qcom/sdm845/Razer/aura/mba.mbn \
             firmware/qcom/sdm845/Razer/aura/modem.mbn \
             firmware/qca/crbtfw21.tlv \
-            firmware/qca/Razer/aura/crnv21.bin; do
+            firmware/qca/Razer/aura/crnv21.bin \
+            firmware/tfa98xx.cnt; do
             test -s "$file" || { echo "ERROR: missing firmware: $file" >&2; exit 1; }
           done
 
@@ -112,6 +114,7 @@ jobs:
             firmware/qcom/sdm845/Razer/aura
             firmware/ath10k/WCN3990/hw1.0
             firmware/qca
+            firmware/tfa98xx.cnt
           key: ${{ steps.firmware-cache-key.outputs.key }}
 
   seed-kernel:
@@ -318,7 +321,7 @@ jobs:
       RAZER_DISPLAY_NATIVE_PANEL: "1"
       RAZER_BOOT_DISPLAY_MODE: normal
       RAZER_SKIP_REFERENCE: "1"
-      RAZER_FIRMWARE_CACHE_VERSION: "1"
+      RAZER_FIRMWARE_CACHE_VERSION: "2"
       RAZER_ROOTFS_CACHE_VERSION: "1"
       RAZER_KERNEL_CORE_CACHE_VERSION: "2"
       RAZER_CCACHE_CACHE_VERSION: "2"
@@ -400,6 +403,7 @@ jobs:
             firmware/qcom/sdm845/Razer/aura
             firmware/ath10k/WCN3990/hw1.0
             firmware/qca
+            firmware/tfa98xx.cnt
           key: ${{ steps.firmware-cache-key.outputs.key }}
 
       - name: Validate firmware source
@@ -643,6 +647,57 @@ jobs:
           test -s firmware/qca/crbtfw21.tlv
           test -s firmware/qca/Razer/aura/crnv21.bin
 
+      - name: Extract TFA9912 factory container
+        if: env.RAZER_FACTORY_ZIP_URL != '' && steps.firmware-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendor_entry="$(
+            7z l -slt "${RAZER_FACTORY_ZIP}" |
+              awk -F' = ' '/^Path = / {
+                path = $2
+                gsub(/\\/, "/", path)
+                if (path ~ /(^|\/)vendor\.img$/) {
+                  print path
+                  exit
+                }
+              }'
+          )"
+          if [ -z "${vendor_entry}" ]; then
+            echo "ERROR: vendor.img was not found inside ${RAZER_FACTORY_ZIP}" >&2
+            exit 1
+          fi
+
+          tmpdir="$(mktemp -d)"
+          cleanup() {
+            rm -rf "${tmpdir}"
+          }
+          trap cleanup EXIT
+
+          7z e -y -o"${tmpdir}" "${RAZER_FACTORY_ZIP}" "${vendor_entry}" >/dev/null
+          vendor_img="${tmpdir}/vendor.img"
+          vendor_raw="${tmpdir}/vendor.raw.img"
+          image_type="$(file -b "${vendor_img}")"
+          if [[ "${image_type}" == *"Android sparse image"* ]]; then
+            simg2img "${vendor_img}" "${vendor_raw}"
+          else
+            cp -f "${vendor_img}" "${vendor_raw}"
+          fi
+
+          raw_type="$(file -b "${vendor_raw}")"
+          echo "Vendor firmware image type: ${raw_type}"
+          if [[ "${raw_type}" != *"ext2 filesystem"* ]] && \
+             [[ "${raw_type}" != *"ext3 filesystem"* ]] && \
+             [[ "${raw_type}" != *"ext4 filesystem"* ]]; then
+            echo "ERROR: unsupported vendor.img filesystem: ${raw_type}" >&2
+            exit 1
+          fi
+
+          debugfs -R "dump /firmware/tfa98xx.cnt ${tmpdir}/tfa98xx.cnt" "${vendor_raw}"
+          test -s "${tmpdir}/tfa98xx.cnt"
+          install -D -m 0644 "${tmpdir}/tfa98xx.cnt" firmware/tfa98xx.cnt
+          echo "Extracted factory TFA9912 container: $(stat -c %s firmware/tfa98xx.cnt) bytes"
+
       - name: Validate extracted factory firmware
         shell: bash
         run: |
@@ -652,6 +707,7 @@ jobs:
             firmware/qcom/sdm845/Razer/aura/modem.mbn
             firmware/qca/crbtfw21.tlv
             firmware/qca/Razer/aura/crnv21.bin
+            firmware/tfa98xx.cnt
           )
           for file in "${required[@]}"; do
             test -s "${file}" || {
@@ -670,6 +726,7 @@ jobs:
             firmware/qcom/sdm845/Razer/aura
             firmware/ath10k/WCN3990/hw1.0
             firmware/qca
+            firmware/tfa98xx.cnt
           key: ${{ steps.firmware-cache-key.outputs.key }}
 
       - name: Remove factory package after extraction

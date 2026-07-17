@@ -1,5 +1,7 @@
 # Experimental power and WiFi panel
 
+[繁體中文部署說明](README.zh-TW.md)
+
 This DRM/KMS UI is intentionally excluded from normal rootfs and GitHub
 Actions release builds. The deploy script cross-compiles its small ARM64 KMS
 presenter and installs it over SSH after flashing:

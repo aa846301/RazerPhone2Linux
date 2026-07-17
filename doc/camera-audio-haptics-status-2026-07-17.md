@@ -1,6 +1,6 @@
 # Camera, audio, and haptics status (2026-07-17)
 
-## Camera audit of `85aeb9a6d`
+## Camera audit and live diagnosis
 
 Both preview paths are represented end to end in the source:
 
@@ -9,10 +9,20 @@ Both preview paths are represented end to end in the source:
 - the experimental control panel resets/configures the media graph and renders
   1920x1080 RAW10 frames for either sensor.
 
-This is preview bring-up, not a complete camera stack. There is no recorded
-on-device success in the repository and no 3A, still capture, recording,
-rear-telephoto, autofocus, OIS, or framework integration. The audit also found
-and fixed the S5K3H7 crop-height response using `width` instead of `height`.
+On the pre-fix image, IMX363 bound successfully but S5K3H7 failed its chip-ID
+read with `-ENXIO`. CAMSS consequently waited for the missing async endpoint
+and did not create the rear sensor media link either.
+
+The stock SMR7 CamX module confirms the front sensor's 8-bit address is `0x20`
+(Linux 7-bit address `0x10`). Its decoded factory power sequence is VANA,
+VDIG, VIO, 24 MHz MCLK, then RESET, with 1/1/0/1/18 ms delays. The initial
+driver incorrectly enabled VIO first; it now follows the factory sequence and
+the launcher uses the complete RAW10 media-bus format names.
+
+This remains preview bring-up, not a complete camera stack. Hardware streaming
+on the newly built image must be recorded before checking off support; 3A,
+still capture, recording, rear telephoto, autofocus, OIS and framework
+integration are still outside this preview milestone.
 
 ## Haptics source and port
 
@@ -22,21 +32,25 @@ integrated LRA haptics peripheral at `0xc000`, and both Cheryl2 defconfigs enabl
 Qualcomm PMIC haptics. The mainline equivalent is `qcom-spmi-haptics`, exposed
 through Linux force feedback.
 
-The aura DTS now enables `pmi8998_haptics` with the downstream 6667 us period,
-and the kernel fragment builds the force-feedback driver as a module. Validate
-with `scripts/diagnostics/phone-test-haptics.sh` before checking off support.
+Razer's board DTS specifies 1300 mV, 800 mA, sine drive and a 6667 us period.
+The mainline driver previously scaled full rumble to 3596 mV and exposed no DT
+limit, so the port adds voltage/current properties and applies the factory
+ceiling while retaining the standard force-feedback interface. Validate with
+`scripts/diagnostics/phone-test-haptics.sh` before checking off support.
 
 ## Audio source and port
 
-The known mainline path is ADSP/QDSP6 + SLIMbus + WCD9340 (tavil). The DTS
-already contained an SDM845 sound-card graph copied from the proven OnePlus
-mainline structure, but deliberately disabled SLIM, the card, and the codec.
-They are now enabled and `SND_SOC_WCD934X` is explicit in the kernel fragment.
+The official SMR7 RC2 board DTS proves the path is ADSP/QDSP6 + SLIMbus +
+WCD9340 (tavil), plus two NXP TFA9912 smart amplifiers at I2C5 addresses 0x34
+and 0x35 on QUAT MI2S. The port now enables the codec driver, both MI2S data
+lines, both amplifier DAIs, and extracts the stock `tfa98xx.cnt` container from
+the authenticated factory vendor image into the rootfs firmware directory.
 
-The public SMR7 archive includes Cheryl2 defconfigs and common Qualcomm audio
-code, but not the proprietary Cheryl2 board DTS needed to prove every physical
-route or any external speaker amplifier. Therefore this change targets ALSA
-card/codec enumeration first and does not claim that speakers, microphones,
-earpiece, or USB-C audio are complete. Validate with
-`scripts/diagnostics/phone-test-audio.sh`, `aplay -l`, mixer inspection, and
-audio-related `dmesg` output.
+Live logs also showed the stock ADSP boots and exposes APR over GLINK, but does
+not publish the `msm/adsp/audio_pd` service expected by the generic SDM845 DTS.
+That left the card deferred at `MultiMedia1`. The Razer override now registers
+q6core/q6afe/q6asm/q6adm without that unavailable protection-domain gate.
+
+The newly built image still needs `scripts/diagnostics/phone-test-audio.sh`,
+`aplay -l`, mixer and playback checks before speakers, microphones, earpiece or
+USB-C audio are marked complete.
