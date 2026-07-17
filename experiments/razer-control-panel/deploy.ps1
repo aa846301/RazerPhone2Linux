@@ -49,8 +49,26 @@ if ($keyLoginExitCode -ne 0) {
 
     $scanFile = [IO.Path]::GetTempFileName()
     try {
-        & ssh-keyscan -T 5 -t ed25519 $HostName 2>$null |
-            Set-Content -Encoding ascii -LiteralPath $scanFile
+        $savedErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            # Windows ssh-keyscan may not support the KEX preferred by a new
+            # Ubuntu host. A normal OpenSSH handshake still records the host
+            # key before the expected authentication failure.
+            & ssh `
+                -o BatchMode=yes `
+                -o ConnectTimeout=10 `
+                -o PreferredAuthentications=none `
+                -o StrictHostKeyChecking=accept-new `
+                -o UserKnownHostsFile=$scanFile `
+                $target "true" 2>$null
+        }
+        finally {
+            $ErrorActionPreference = $savedErrorActionPreference
+        }
+        if ((Get-Item -LiteralPath $scanFile).Length -eq 0) {
+            throw "Unable to record the phone SSH host key"
+        }
         $fingerprintLine = & ssh-keygen -lf $scanFile
         if ($LASTEXITCODE -ne 0 -or !$fingerprintLine) {
             throw "Unable to read the phone SSH host key"

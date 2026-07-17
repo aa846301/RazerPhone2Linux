@@ -13,6 +13,32 @@ Pass the phone's current WiFi address with `-HostName`, for example
 address. On the live test device, it disables `razer-panel-idle-blank.service`
 and manages its own 60-second blanking and touch wake-up.
 
+The default USB deployment command, which can also restore the SSH public key
+after a userdata flash, is:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\repo\razorphone2linux\experiments\razer-control-panel\deploy.ps1
+```
+
+The deployed files on the phone are:
+
+```text
+/usr/local/sbin/razer-control-panel
+/usr/local/sbin/razer-kms-present
+/usr/local/sbin/razer-shutdown-console
+/etc/systemd/system/razer-control-panel.service
+```
+
+Check or restart it manually over SSH with:
+
+```bash
+sudo systemctl status razer-control-panel.service
+sudo systemctl restart razer-control-panel.service
+```
+
+Because this experiment is not part of `rootfs.img`, rerun `deploy.ps1` after
+every userdata/rootfs flash.
+
 The dashboard reads the PMI8998 RRADC `usbin_v` and `usbin_i` channels for
 actual external-input voltage, current, and power. It separately reads the
 battery fuel-gauge current and labels the live source as `USB ONLY`,
