@@ -1594,7 +1594,7 @@ index 000000000000..c450faa75e84
 +		sel->r.left = 0;
 +		sel->r.top = 0;
 +		sel->r.width = s5k3h7->mode->width;
-+		sel->r.height = s5k3h7->mode->width;
++		sel->r.height = s5k3h7->mode->height;
 +		return 0;
 +	default:
 +		return -EINVAL;

@@ -353,8 +353,8 @@ apt install -y \
     iproute2 iputils-ping \
     dbus \
     usbutils pciutils \
-    evtest \
-	v4l-utils \
+    evtest joystick \
+	alsa-utils v4l-utils \
     htop \
     ca-certificates \
     gnupg \

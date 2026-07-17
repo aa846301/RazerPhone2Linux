@@ -24,6 +24,8 @@ param(
 
     [string]$UbuntuMirror = "https://ports.ubuntu.com/ubuntu-ports",
 
+    [string]$Distro = "Ubuntu-24.04",
+
     [string]$WslRepo = "",
     [string]$WslWorkdir = ""
 )
@@ -32,14 +34,14 @@ $ErrorActionPreference = "Stop"
 
 if ([string]::IsNullOrWhiteSpace($WslRepo)) {
     $windowsRepo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path.Replace("\", "/")
-    $WslRepo = (& wsl.exe -- wslpath -a -u $windowsRepo).Trim()
+    $WslRepo = (& wsl.exe -d $Distro --exec wslpath -a -u $windowsRepo).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($WslRepo)) {
         throw "Could not convert the repository path for WSL."
     }
 }
 
 if ([string]::IsNullOrWhiteSpace($WslWorkdir)) {
-    $WslWorkdir = (& wsl.exe -- bash -lc 'printf "%s" "$HOME/razorphone2linux"').Trim()
+    $WslWorkdir = (& wsl.exe -d $Distro --exec sh -c 'printf "%s" "$HOME/razorphone2linux"').Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($WslWorkdir)) {
         throw "Could not determine the WSL user work directory."
     }
@@ -48,7 +50,7 @@ if ([string]::IsNullOrWhiteSpace($WslWorkdir)) {
 function Invoke-WslUser {
     param([Parameter(Mandatory)][string]$Command)
 
-    & wsl.exe -- bash -lc $Command
+    & wsl.exe -d $Distro --exec bash -lc $Command
     if ($LASTEXITCODE -ne 0) {
         throw "WSL user phase failed with exit code $LASTEXITCODE."
     }
@@ -57,7 +59,7 @@ function Invoke-WslUser {
 function Invoke-WslRoot {
     param([Parameter(Mandatory)][string]$Command)
 
-    & wsl.exe -u root -- bash -lc $Command
+    & wsl.exe -d $Distro -u root --exec bash -lc $Command
     if ($LASTEXITCODE -ne 0) {
         throw "WSL root phase failed with exit code $LASTEXITCODE."
     }

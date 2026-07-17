@@ -27,6 +27,12 @@ charge-limited, and ready for users to install their own software.
 - USB NCM networking and SSH work at `192.168.137.133`.
 - WiFi works through MSS/WLFW, `rmtfs`, userspace `pd-mapper`, patched
   `tqftpserv`, Razer FIH NV sharing, and the ath10k host-capability quirk.
+- Front S5K3H7 and rear IMX363 RAW10 preview paths are implemented in the
+  experimental control panel, but still require on-device validation and do
+  not yet provide a complete camera stack (3A, still capture, or recording).
+- PMI8998 LRA haptics and the WCD9340/SLIMbus sound card are enabled for the
+  next hardware-validation build. They remain unchecked below until tested on
+  a phone.
 
 ## Hardware Support Checklist
 

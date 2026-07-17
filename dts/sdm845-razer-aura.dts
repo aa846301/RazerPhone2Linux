@@ -24,6 +24,7 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/input/linux-event-codes.h>
+#include <dt-bindings/input/qcom,spmi-haptics.h>
 #include <dt-bindings/leds/common.h>
 #include <dt-bindings/phy/phy-qcom-qusb2.h>
 #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
@@ -1112,6 +1113,24 @@
 
 /*
  * ==========================================================================
+ * PMI8998 LRA Haptics
+ * ==========================================================================
+ * Razer's downstream PMI8998 node uses direct play, a 3.2 V maximum and a
+ * 6667 us sample period.  Mainline's buffer mode exposes the same actuator
+ * through the standard EV_FF/FF_RUMBLE interface; keep the factory resonant
+ * period and let the input driver scale the requested magnitude.
+ */
+&pmi8998_haptics {
+	status = "okay";
+	qcom,actuator-type = <HAP_TYPE_LRA>;
+	qcom,wave-shape = <HAP_WAVE_SINE>;
+	qcom,play-mode = <HAP_PLAY_BUFFER>;
+	qcom,wave-play-rate-us = <6667>;
+	qcom,brake-pattern = <0x3 0x3 0x2 0x1>;
+};
+
+/*
+ * ==========================================================================
  * Audio Subsystem (QQ6/ASM/AFE DAIs)
  * ==========================================================================
  */
@@ -1193,12 +1212,7 @@
  * ==========================================================================
  */
 &slim {
-	/*
-	 * Keep SLIM disabled while validating MSS/WCN3990 WiFi bring-up. A
-	 * full-factory-peripheral contrast with SLIM/audio/BT enabled did not move
-	 * the MSS fatal boundary or create WLFW.
-	 */
-	status = "disabled";
+	status = "okay";
 };
 
 /*
@@ -1211,12 +1225,7 @@
 	model = "Razer Phone 2";
 	pinctrl-0 = <&quat_mi2s_active &quat_mi2s_sd0_active &quat_mi2s_sd1_active>;
 	pinctrl-names = "default";
-	/*
-	 * Keep audio disabled while validating MSS/WCN3990 WiFi bring-up. The
-	 * full-factory-peripheral contrast did not help and adds unrelated codec
-	 * and routing noise.
-	 */
-	status = "disabled";
+	status = "okay";
 
 	audio-routing = "RX_BIAS", "MCLK",
 			"AMIC1", "MIC BIAS3",
@@ -1537,7 +1546,7 @@
  * ==========================================================================
  */
 &wcd9340 {
-	status = "disabled";
+	status = "okay";
 
 	pinctrl-0 = <&wcd_intr_default>;
 	pinctrl-names = "default";

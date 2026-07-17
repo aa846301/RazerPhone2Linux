@@ -29,3 +29,11 @@ Run host-side commands from the repository root, for example:
 ```bash
 bash scripts/diagnostics/build-pdmapper-live.sh
 ```
+
+The following read-only bring-up tests are safe to copy to the phone after a
+matching kernel/rootfs image is installed:
+
+- `phone-test-haptics.sh` finds the PMI8998 `spmi_haptics` input node and plays
+  one `FF_RUMBLE` effect with `fftest`.
+- `phone-test-audio.sh` lists ALSA PCMs and plays one stereo sine-test pass. An
+  explicit ALSA PCM name can be passed as its first argument.
