@@ -1,21 +1,31 @@
 # Camera, audio, and haptics status (2026-07-17)
 
-## Live retest after `cc5ea43e`
+## Full live audit of `v1.0.15`
 
-- Front S5K3H7 still fails chip-ID access with `-ENXIO`; CAMSS therefore does
-  not bind either sensor endpoint and the otherwise detected rear IMX363 has
-  no media link. The next image corrects the front VANA/VDIG upstream rail
-  model to match the factory `pm8998_s3` topology.
-- The input FF API accepted effects, but no physical vibration was felt. The
-  installed image incorrectly used buffer mode; factory `vibrator.dtsi` uses
-  direct mode and explicitly disables LRA auto resonance. The next image
-  restores those settings and extends the mainline driver accordingly.
-- The sound card and both TFA9912 codecs register. Enabling
-  `QUAT_MI2S_RX Audio Mixer MultiMedia1` starts and unmutes both codecs, but
-  playback stops when the Razer ADSP rejects `ASM_CMD_SHARED_MEM_MAP_REGIONS`
-  with status 1. PCM playback is therefore not complete; the next image logs
-  the exact mapped address and size for comparison with the factory audio ION
-  range `0x10000000..0x1fffffff`.
+- The phone is running the `v1.0.15` kernel, but its rootfs still contains the
+  older `qcom-spmi-haptics.ko` and `q6asm.ko`. Boot-only flashing is therefore
+  insufficient for this hardware patch series. Temporarily loading the release
+  haptics module makes the PMI8998 device probe and completes an FF_RUMBLE test;
+  the installed rootfs module still reverts to the failure after reboot.
+- Front S5K3H7 chip-ID access fails with `-ENXIO`. Live rail tracing proves that
+  GPIO4, GPIO7, GPIO8, reset and MCLK are asserted, but source review found the
+  DTS voltage/topology was copied from an unused 1.352 V S3 variant. Production
+  MP/PVT/DVT overlays actually include `sdm845-camera_rc2-pre-evt2.dtsi`, where
+  GPIO7 switches the 2.8 V VANA rail. The DTS is corrected to that production
+  topology.
+- The rear IMX363 does probe, but has zero media links because CAMSS creates
+  external links only after every async endpoint binds. A CAMSS patch now links
+  and registers each sensor in the notifier `bound` callback, so a failed front
+  sensor no longer hides the rear sensor node.
+- The sound card and both TFA9912 codecs enumerate. With the matching diagnostic
+  `q6asm.ko`, playback requests an IOVA at `0xfff80000`; Razer's ADSP accepts the
+  factory audio ION range `0x10000000..0x1fffffff`, so memory mapping times out.
+  The Q6ASM DAI now uses a 29-bit coherent DMA mask to keep allocations inside
+  the firmware-visible address range.
+
+These source corrections still require a matching boot image and rootfs/module
+set, followed by physical front/rear preview, vibration and audible playback
+tests. Enumeration or a successful userspace ioctl alone is not completion.
 
 ## Camera audit and live diagnosis
 
@@ -34,7 +44,9 @@ The stock SMR7 CamX module confirms the front sensor's 8-bit address is `0x20`
 (Linux 7-bit address `0x10`). Its decoded factory power sequence is VANA,
 VDIG, VIO, 24 MHz MCLK, then RESET, with 1/1/0/1/18 ms delays. The initial
 driver incorrectly enabled VIO first; it now follows the factory sequence and
-the launcher uses the complete RAW10 media-bus format names.
+the launcher uses the complete RAW10 media-bus format names. The production
+RC2 MP include chain additionally confirms VANA is the GPIO7-switched 2.8 V
+rail, not the unused later file's direct 1.352 V S3 supply.
 
 This remains preview bring-up, not a complete camera stack. Hardware streaming
 on the newly built image must be recorded before checking off support; 3A,

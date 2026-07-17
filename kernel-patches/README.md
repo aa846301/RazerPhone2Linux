@@ -16,6 +16,12 @@ Current production delta:
 - `0005-power-supply-qcom-smbx-add-charge-behaviour.patch` exposes the
   standard `charge_behaviour` power-supply control and inhibits battery
   charging without suspending external USB input.
+- `0006` through `0009` add the Razer front camera, factory haptics limits,
+  multi-codec QUAT MI2S setup and PMI8998 direct-mode support.
+- `0010` logs Q6ASM map requests for live firmware-range diagnosis.
+- `0011` constrains Q6ASM DMA to the Razer ADSP-visible address window.
+- `0012` registers each bound CAMSS sensor independently so a missing front
+  sensor cannot suppress the working rear sensor node.
 
 Observational logging, crash dumps, QRTR dumps, and live-only experiments are
 kept under `diagnostics/` and are not applied by normal builds.

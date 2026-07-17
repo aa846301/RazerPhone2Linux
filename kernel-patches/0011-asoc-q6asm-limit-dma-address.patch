@@ -1,0 +1,20 @@
+diff --git a/sound/soc/qcom/qdsp6/q6asm-dai.c b/sound/soc/qcom/qdsp6/q6asm-dai.c
+--- a/sound/soc/qcom/qdsp6/q6asm-dai.c
++++ b/sound/soc/qcom/qdsp6/q6asm-dai.c
+@@ -1312,6 +1312,16 @@ static int q6asm_dai_probe(struct platform_device *pdev)
+ 	else
+ 		pdata->sid = args.args[0] & SID_MASK_DEFAULT;
+ 
++	/*
++	 * Older Qualcomm ADSP firmware, including the Razer Phone 2 image,
++	 * accepts audio buffers only in its 0x10000000..0x1fffffff IOVA
++	 * window.  Without a mask the arm-smmu DMA allocator places the first
++	 * buffer just below 4 GiB and ASM_CMD_SHARED_MEM_MAP_REGIONS times out.
++	 */
++	rc = dma_set_mask_and_coherent(dev, DMA_BIT_MASK(29));
++	if (rc)
++		return rc;
++
+ 	dev_set_drvdata(dev, pdata);
+ 
+ 	rc = of_q6asm_parse_dai_data(dev, pdata);

@@ -25,6 +25,11 @@ wsl.exe -d Ubuntu-24.04 --exec sudo apt-get install -y gcc-aarch64-linux-gnu lib
   SSH public key 寫進設備時需要；若設備已接受指定 key，則不需要 PuTTY。
 - 設備已刷入可正常顯示、觸控與 SSH 連線的相符 kernel/rootfs。
 
+硬體修正同時包含 DTB、內建核心程式與 loadable modules。只刷 `boot.img`
+不夠；必須同時部署同一次 GitHub Actions 產出的 rootfs，或手動更新所有相符
+模組並執行 `depmod -a`。核心與 rootfs 版本混用時，面板按鈕仍可操作，但相機、
+震動與聲音會在 kernel driver 階段失敗。
+
 設備端至少要有：
 
 ```bash
