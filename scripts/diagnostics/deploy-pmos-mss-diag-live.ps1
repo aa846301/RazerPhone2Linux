@@ -8,7 +8,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 $releaseFile = Join-Path $repoRoot "output\kernel.release"
 $moduleRoot = Join-Path $repoRoot "output\live-modules\pmos-mss-diag\kernel\drivers\remoteproc"
 

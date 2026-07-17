@@ -7,7 +7,7 @@ bring-up (root cause boundary in `doc/wifi-mss-status-2026-05-21.md` / `CLAUDE.m
 
 ## Capture method / limits
 
-- Reproducible script: `scripts/capture-android-wifi-mechanism.sh`.
+- Reproducible script: `scripts/diagnostics/capture-android-wifi-mechanism.sh`.
 - No root (`uid=2000 shell`, `ro.build.type=user`, no `su`). SELinux denied
   `adb pull` of `/sys/firmware/fdt`, `/vendor/firmware_mnt/image`,
   `/vendor/firmware/wlan`. The §5 root-only items (strace `rmt_storage`,

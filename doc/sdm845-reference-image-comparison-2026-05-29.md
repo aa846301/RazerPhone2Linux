@@ -237,7 +237,7 @@ Build the ARM64 live diagnostic binary from WSL:
 
 ```bash
 cd /mnt/c/repo/razorphone2linux
-bash scripts/build-pdmapper-live.sh
+bash scripts/diagnostics/build-pdmapper-live.sh
 ```
 
 Deploy/run when SSH works:
@@ -404,7 +404,7 @@ sudo /tmp/phone-mss-crash-evidence.sh
 Source script:
 
 ```text
-scripts/phone-mss-crash-evidence.sh
+scripts/diagnostics/phone-mss-crash-evidence.sh
 ```
 
 The script is live-only and captures:
@@ -512,7 +512,7 @@ flashed into rootfs:
 ```text
 kernel-patches/pmos-contrast/0001-qcom-q6v5-dump-mss-crash-smem.patch
 kernel-patches/pmos-contrast/0002-qcom-q6v5-mss-dump-registers-on-crash.patch
-scripts/deploy-pmos-mss-diag-live.ps1
+scripts/diagnostics/deploy-pmos-mss-diag-live.ps1
 output/live-modules/pmos-mss-diag/kernel/drivers/remoteproc/qcom_q6v5.ko.zst
 output/live-modules/pmos-mss-diag/kernel/drivers/remoteproc/qcom_q6v5_mss.ko.zst
 ```

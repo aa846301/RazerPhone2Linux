@@ -1119,7 +1119,7 @@ register window triggered a synchronous external abort in
 reads and keep only SMEM probing.
 
 Live result after deploying the corrected patch and running
-`scripts/phone-mss-smem-short-test.sh`:
+`scripts/diagnostics/phone-mss-smem-short-test.sh`:
 
 ```text
 remote processor 4080000.remoteproc is now up
@@ -2269,7 +2269,7 @@ A live-only `rmtfs-detail` binary was built from `linux-msm/rmtfs` commit
 build flow is now reproducible with:
 
 ```bash
-bash scripts/prepare-rmtfs-detail-live.sh
+bash scripts/diagnostics/prepare-rmtfs-detail-live.sh
 bash /tmp/phone-build-rmtfs-detail-live.sh
 ```
 

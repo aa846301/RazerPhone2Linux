@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP_DIR="$REPO_ROOT/.tmp"
 SRC_DIR="$TMP_DIR/rmtfs-detail-src"
 OUT_DIR="$REPO_ROOT/output/rmtfs-detail-live"
@@ -41,7 +41,7 @@ Prepared rmtfs-detail live source:
   $OUT_DIR/rmtfs-detail-source.tar.gz
 
 Copy to phone with the two arm64 dev debs, then run:
-  bash scripts/phone-build-rmtfs-detail-live.sh
+  bash scripts/diagnostics/phone-build-rmtfs-detail-live.sh
 
 The phone build script only writes under /tmp and produces /tmp/rmtfs-detail.
 EOF

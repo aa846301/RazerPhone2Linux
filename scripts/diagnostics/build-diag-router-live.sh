@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP_DIR="$REPO_ROOT/.tmp"
 DIAG_DIR="$TMP_DIR/diag"
 QRTR_DIR="$TMP_DIR/qrtr"

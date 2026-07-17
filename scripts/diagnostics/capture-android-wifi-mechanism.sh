@@ -14,9 +14,12 @@
 # Prereq on phone: Developer options -> USB debugging ON + authorize RSA key.
 #
 # Usage:
-#   bash scripts/capture-android-wifi-mechanism.sh [adb_path] [output_dir]
+#   bash scripts/diagnostics/capture-android-wifi-mechanism.sh [adb_path] [output_dir]
 
 set -u
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO_ROOT"
 
 ADB="${1:-/mnt/c/Program Files/ASUS/GlideX/adb.exe}"
 STAMP="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)"
