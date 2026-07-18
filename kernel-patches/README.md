@@ -24,8 +24,9 @@ Current production delta:
   sensor cannot suppress the working rear sensor node.
 - `0013` enables the PMI8998 haptics analog output stage required by the
   factory driver before `HAP_PLAY` can drive the LRA.
-- `0014` keeps the Razer dual-amplifier QUAT MI2S backend at four channels so
-  AFE transmits on both factory-wired SD0 and SD1 data lines.
+- The factory `qcom,msm-mi2s-rx-lines = <2>` value is a bitmask selecting SD1,
+  not a count of two data lines. The board DTS keeps the QUAT backend stereo
+  and selects only SD1 for both TFA9912 amplifiers.
 - `0015` follows the downstream SLIMbus fallback: if the factory ADSP omits
   the `avs/audio` PDR service, continue with SSR and start NGD when its QMI
   service arrives so WCD9340 devices can enumerate.

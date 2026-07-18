@@ -48,13 +48,13 @@ diagnostics are userspace changes that can be redeployed without flashing.
   `HAP_EN_CTL3` must enable the H-bridge, PWM path, current limiter, DAC and
   control path (`0xfd`) before `HAP_EN_CTL1`/`HAP_PLAY` can drive the LRA.
 - Q6ASM now maps playback at ADSP-visible IOVA `0x1ff80000`; PCM0 is RUNNING and
-  both TFA9912 devices start and unmute, but the phone remains silent. The
-  mainline SDM845 backend fixup forces two channels, and Q6AFE consequently
-  collapses the configured SD0+SD1 mask back to SD0. The factory topology uses
-  two QUAT MI2S RX data lines, so the next kernel keeps this dual-codec backend
-  at four channels (`AFE_PORT_I2S_QUAD01`).
+  both TFA9912 devices start and unmute, but the phone remains silent. A later
+  audit of Razer's `msm-dai-q6-v2.c` proved that
+  `qcom,msm-mi2s-rx-lines = <2>` is a bitmask selecting SD1, not a count of two
+  lines. The earlier SD0+SD1/four-channel interpretation was wrong; the
+  corrected backend is stereo on SD1.
 
-The PMIC output-stage, four-channel QUAT backend, front-rail pinctrl and panel
+The PMIC output-stage, SD1 stereo QUAT backend, front-rail pinctrl and panel
 preview corrections are source-complete but not yet hardware-validated. They
 must remain marked incomplete until a matching boot/rootfs pair is flashed.
 
@@ -129,8 +129,8 @@ ceiling while retaining the standard force-feedback interface. Validate with
 
 The official SMR7 RC2 board DTS proves the path is ADSP/QDSP6 + SLIMbus +
 WCD9340 (tavil), plus two NXP TFA9912 smart amplifiers at I2C5 addresses 0x34
-and 0x35 on QUAT MI2S. The port now enables the codec driver, both MI2S data
-lines, both amplifier DAIs, and extracts the stock `tfa98xx.cnt` container from
+and 0x35 on QUAT MI2S. The port now enables the codec driver, the factory SD1
+data line, both amplifier DAIs, and extracts the stock `tfa98xx.cnt` container from
 the authenticated factory vendor image into the rootfs firmware directory.
 
 Live logs also showed the stock ADSP boots and exposes APR over GLINK, but does

@@ -27,12 +27,12 @@ charge-limited, and ready for users to install their own software.
 - USB NCM networking and SSH work at `192.168.137.133`.
 - WiFi works through MSS/WLFW, `rmtfs`, userspace `pd-mapper`, patched
   `tqftpserv`, Razer FIH NV sharing, and the ath10k host-capability quirk.
-- Front S5K3H7 and rear IMX363 RAW10 preview paths are implemented in the
-  experimental control panel, but still require on-device validation and do
-  not yet provide a complete camera stack (3A, still capture, or recording).
-- PMI8998 LRA haptics now use the factory 1300 mV/800 mA limits. Audio connects
-  WCD9340/SLIMbus, both factory TFA9912 amplifiers, and `tfa98xx.cnt`. These
-  remain unchecked below until the next image is tested on a phone.
+- Rear IMX363 RAW10 capture through CSI/VFE is hardware-validated; its current
+  diagnostic preview still lacks 3A. Front S5K3H7 receives all three rails,
+  reset, and 24 MHz MCLK but its CCI1 chip-ID transaction returns `-ENXIO`.
+- PMI8998 LRA haptics use the factory 1300 mV/800 mA limits and physical
+  vibration is validated. Audio connects WCD9340/SLIMbus, both factory TFA9912
+  amplifiers, and `tfa98xx.cnt`; the corrected QUAT route is stereo on SD1.
 
 ## Hardware Support Checklist
 
@@ -57,7 +57,8 @@ split so the remaining work stays visible.
 - [ ] Bluetooth audio
 - [ ] System suspend and deep sleep (panel blanking is supported)
 - [ ] Speaker, microphones, earpiece, and USB-C audio
-- [ ] Front and rear cameras
+- [x] Rear-camera RAW10 sensor, CSI/VFE, and diagnostic preview
+- [ ] Front camera, 3A, still capture, and recording
 - [ ] GNSS/GPS
 - [ ] Modem calls, SMS, and mobile data
 - [ ] NFC
@@ -65,7 +66,8 @@ split so the remaining work stays visible.
 - [ ] USB 3 SuperSpeed data (fastboot currently uses USB 2)
 - [ ] DisplayPort alternate mode
 - [ ] Accelerometer, gyroscope, magnetometer, proximity, and ambient light
-- [ ] Haptics/vibrator and notification/Chroma LEDs
+- [x] Haptics/vibrator
+- [ ] Notification/Chroma LEDs
 - [ ] Fingerprint reader
 - [ ] Qi wireless charging
 - [ ] Full-disk encryption integration

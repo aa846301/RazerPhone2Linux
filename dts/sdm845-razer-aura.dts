@@ -1193,7 +1193,8 @@
 &q6afedai {
 	dai@22 {
 		reg = <QUATERNARY_MI2S_RX>;
-		qcom,sd-lines = <0 1>;
+		/* Factory qcom,msm-mi2s-rx-lines = <2> is the SD1 bitmask. */
+		qcom,sd-lines = <1>;
 	};
 
 	dai@23 {

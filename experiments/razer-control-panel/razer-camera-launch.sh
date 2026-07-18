@@ -53,4 +53,13 @@ media-ctl -d "$media" -l '"msm_csid0":1->"msm_vfe0_rdi0":0[1]'
 video=$(media-ctl -d "$media" -e msm_vfe0_video0)
 [ -n "$video" ] || { echo "VFE video node not found" >&2; exit 1; }
 
+# The kernel sensor driver exposes raw controls; the diagnostic panel does not
+# run Android CamX/3A.  Gain zero leaves the IMX363 close to black level and
+# makes fixed-pattern noise look like diagonal stripes after preview scaling.
+if [ "$camera" = rear ] && command -v v4l2-ctl >/dev/null 2>&1; then
+	sensor_dev=$(media-ctl -d "$media" -e "$sensor")
+	v4l2-ctl -d "$sensor_dev" --set-ctrl \
+		"exposure=1286,analogue_gain=${RAZER_REAR_ANALOGUE_GAIN:-160},digital_gain=1024"
+fi
+
 exec /usr/local/sbin/razer-camera-preview "$video" "$shared" "$width" "$height" "$bayer" "$mirror" "$fourcc"
