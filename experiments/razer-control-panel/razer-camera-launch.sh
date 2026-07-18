@@ -26,10 +26,10 @@ case "$camera" in
 	rear)
 		sensor=$(printf '%s\n' "$topology" | sed -n 's/.*entity [0-9][0-9]*: \(imx363 [^ (]*\).*/\1/p' | head -n1)
 		csiphy=msm_csiphy0
-		format=SRGGB10_1X10
-		bayer=RGGB
+		format=SBGGR10_1X10
+		bayer=BGGR
 		mirror=0
-		fourcc=pRAA
+		fourcc=pBAA
 		;;
 	front)
 		sensor=$(printf '%s\n' "$topology" | sed -n 's/.*entity [0-9][0-9]*: \(s5k3h7 [^ (]*\).*/\1/p' | head -n1)
@@ -50,7 +50,7 @@ media-ctl -d "$media" -V '"msm_csid0":0[fmt:'"$format"'/1920x1080],"msm_csid0":1
 media-ctl -d "$media" -V '"msm_vfe0_rdi0":0[fmt:'"$format"'/1920x1080],"msm_vfe0_rdi0":1[fmt:'"$format"'/1920x1080]'
 media-ctl -d "$media" -l "\"$csiphy\":1->\"msm_csid0\":0[1]"
 media-ctl -d "$media" -l '"msm_csid0":1->"msm_vfe0_rdi0":0[1]'
-video=$(media-ctl -d "$media" -e msm_vfe0_rdi0)
+video=$(media-ctl -d "$media" -e msm_vfe0_video0)
 [ -n "$video" ] || { echo "VFE video node not found" >&2; exit 1; }
 
 exec /usr/local/sbin/razer-camera-preview "$video" "$shared" "$width" "$height" "$bayer" "$mirror" "$fourcc"

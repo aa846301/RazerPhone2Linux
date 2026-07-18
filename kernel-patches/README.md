@@ -22,6 +22,10 @@ Current production delta:
 - `0011` constrains Q6ASM DMA to the Razer ADSP-visible address window.
 - `0012` registers each bound CAMSS sensor independently so a missing front
   sensor cannot suppress the working rear sensor node.
+- `0013` enables the PMI8998 haptics analog output stage required by the
+  factory driver before `HAP_PLAY` can drive the LRA.
+- `0014` keeps the Razer dual-amplifier QUAT MI2S backend at four channels so
+  AFE transmits on both factory-wired SD0 and SD1 data lines.
 
 Observational logging, crash dumps, QRTR dumps, and live-only experiments are
 kept under `diagnostics/` and are not applied by normal builds.

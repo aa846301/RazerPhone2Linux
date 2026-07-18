@@ -1,0 +1,39 @@
+diff --git a/drivers/input/misc/qcom-spmi-haptics.c b/drivers/input/misc/qcom-spmi-haptics.c
+--- a/drivers/input/misc/qcom-spmi-haptics.c
++++ b/drivers/input/misc/qcom-spmi-haptics.c
+@@ -36,6 +36,15 @@
+ #define HAP_EN_CTL_REG			0x46
+ #define HAP_EN_BIT			BIT(7)
+ 
++#define HAP_EN_CTL3_REG			0x4A
++#define HAP_HBRIDGE_EN_BIT		BIT(7)
++#define HAP_PWM_SIGNAL_EN_BIT		BIT(6)
++#define HAP_ILIM_EN_BIT			BIT(5)
++#define HAP_ILIM_CC_EN_BIT		BIT(4)
++#define HAP_AUTO_RES_RBIAS_EN_BIT	BIT(3)
++#define HAP_DAC_EN_BIT			BIT(2)
++#define HAP_PWM_CTL_EN_BIT		BIT(0)
++
+ #define HAP_EN_CTL2_REG			0x48
+ #define BRAKE_EN_BIT			BIT(0)
+ 
+@@ -526,6 +535,19 @@ static int spmi_haptics_init(struct spmi_haptics *haptics)
+ 	if (ret < 0)
+ 		return ret;
+ 
++	/*
++	 * PMI8998 requires the analog output stage to be enabled separately
++	 * from HAP_EN_CTL and HAP_PLAY.  Razer's factory qti-haptics driver
++	 * programs these bits before allowing any waveform to run.
++	 */
++	val = HAP_HBRIDGE_EN_BIT | HAP_PWM_SIGNAL_EN_BIT | HAP_ILIM_EN_BIT |
++	      HAP_ILIM_CC_EN_BIT | HAP_AUTO_RES_RBIAS_EN_BIT |
++	      HAP_DAC_EN_BIT | HAP_PWM_CTL_EN_BIT;
++	ret = spmi_haptics_write(haptics, haptics->base + HAP_EN_CTL3_REG,
++				 &val, 1);
++	if (ret < 0)
++		return ret;
++
+ 	/*
+ 	 * Configure auto resonance
+ 	 * see spmi_haptics_lra_auto_res_config downstream

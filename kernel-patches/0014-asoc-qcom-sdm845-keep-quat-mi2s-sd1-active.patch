@@ -1,0 +1,30 @@
+diff --git a/sound/soc/qcom/sdm845.c b/sound/soc/qcom/sdm845.c
+--- a/sound/soc/qcom/sdm845.c
++++ b/sound/soc/qcom/sdm845.c
+@@ -519,6 +519,7 @@ static int sdm845_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
+ 				struct snd_pcm_hw_params *params)
+ {
++	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+ 	struct snd_interval *rate = hw_param_interval(params,
+ 					SNDRV_PCM_HW_PARAM_RATE);
+ 	struct snd_interval *channels = hw_param_interval(params,
+ 					SNDRV_PCM_HW_PARAM_CHANNELS);
+@@ -525,7 +526,17 @@ static int sdm845_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
+ 	struct snd_mask *fmt = hw_param_mask(params, SNDRV_PCM_HW_PARAM_FORMAT);
+ 
+ 	rate->min = rate->max = DEFAULT_SAMPLE_RATE_48K;
+-	channels->min = channels->max = 2;
++	/*
++	 * Razer Phone 2 routes its two TFA9912 amplifiers over QUAT MI2S
++	 * SD0 and SD1.  q6afe collapses a two-line mask back to SD0 when the
++	 * backend is fixed to stereo, leaving the second physical data line
++	 * silent.  A four-channel backend keeps AFE_PORT_I2S_QUAD01 active;
++	 * the ADSP matrix expands the stereo frontend into that backend.
++	 */
++	if (cpu_dai->id == QUATERNARY_MI2S_RX && rtd->dai_link->num_codecs > 1)
++		channels->min = channels->max = 4;
++	else
++		channels->min = channels->max = 2;
+ 	snd_mask_set_format(fmt, SNDRV_PCM_FORMAT_S16_LE);
+ 
+ 	return 0;

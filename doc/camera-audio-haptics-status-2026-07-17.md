@@ -1,5 +1,32 @@
 # Camera, audio, and haptics status (2026-07-17)
 
+## Follow-up live audit of `v1.0.16`
+
+- Rear IMX363 is now proven at the hardware level. With the graph configured as
+  `SBGGR10_1X10` and the capture node set to `pBAA`, `/dev/video0` delivered ten
+  consecutive 1920x1080 frames at about 23 FPS. The panel launcher was instead
+  opening the `msm_vfe0_rdi0` subdevice and its preview helper used the
+  single-planar API. Both userspace errors are corrected for the next image.
+- Front S5K3H7 still fails the chip-ID transaction with `-ENXIO`. The factory
+  rail order and voltages are already present, but the PM8998 GPIO4/GPIO7/GPIO8
+  pin states were not: the live PMIC GPIO dump retained pull configurations
+  that differ from Razer's output-low factory states. The next DTB restores the
+  original normal-function, output-low, bias-disabled, power-source-0 pinctrl.
+- EV_FF accepts and uploads rumble effects, but no physical vibration occurs.
+  Factory `qti-haptics` source shows the missing initialization: PMI8998
+  `HAP_EN_CTL3` must enable the H-bridge, PWM path, current limiter, DAC and
+  control path (`0xfd`) before `HAP_EN_CTL1`/`HAP_PLAY` can drive the LRA.
+- Q6ASM now maps playback at ADSP-visible IOVA `0x1ff80000`; PCM0 is RUNNING and
+  both TFA9912 devices start and unmute, but the phone remains silent. The
+  mainline SDM845 backend fixup forces two channels, and Q6AFE consequently
+  collapses the configured SD0+SD1 mask back to SD0. The factory topology uses
+  two QUAT MI2S RX data lines, so the next kernel keeps this dual-codec backend
+  at four channels (`AFE_PORT_I2S_QUAD01`).
+
+The PMIC output-stage, four-channel QUAT backend, front-rail pinctrl and panel
+preview corrections are source-complete but not yet hardware-validated. They
+must remain marked incomplete until a matching boot/rootfs pair is flashed.
+
 ## Full live audit of `v1.0.15`
 
 - The phone is running the `v1.0.15` kernel, but its rootfs still contains the

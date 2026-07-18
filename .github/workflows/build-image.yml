@@ -985,6 +985,20 @@ jobs:
           path: ${{ env.RAZER_WORKDIR }}/kernel/linux
           key: kernel-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('config/kernel-source.env') }}
 
+      - name: Validate experimental hardware panel helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n \
+            experiments/razer-control-panel/razer-camera-launch.sh \
+            experiments/razer-control-panel/razer-haptic-test.sh \
+            experiments/razer-control-panel/razer-audio-test.sh
+          python3 -m py_compile \
+            experiments/razer-control-panel/razer-control-panel.py
+          aarch64-linux-gnu-gcc -O2 -Wall -Wextra -Werror \
+            experiments/razer-control-panel/razer-camera-preview.c \
+            -o /tmp/razer-camera-preview
+
       - name: Test charging policy
         shell: bash
         run: bash scripts/razer-charge-limits-selftest.sh

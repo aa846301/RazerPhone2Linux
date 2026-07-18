@@ -71,17 +71,40 @@ static uint8_t to_u8(unsigned int value)
 	return value > 255 ? 255 : value;
 }
 
+enum bayer_color {
+	BAYER_RED,
+	BAYER_GREEN,
+	BAYER_BLUE,
+};
+
+enum bayer_pattern {
+	BAYER_RGGB,
+	BAYER_GRBG,
+	BAYER_BGGR,
+	BAYER_GBRG,
+};
+
+static enum bayer_color bayer_color_at(enum bayer_pattern pattern, int x, int y)
+{
+	static const enum bayer_color colors[][4] = {
+		[BAYER_RGGB] = { BAYER_RED, BAYER_GREEN, BAYER_GREEN, BAYER_BLUE },
+		[BAYER_GRBG] = { BAYER_GREEN, BAYER_RED, BAYER_BLUE, BAYER_GREEN },
+		[BAYER_BGGR] = { BAYER_BLUE, BAYER_GREEN, BAYER_GREEN, BAYER_RED },
+		[BAYER_GBRG] = { BAYER_GREEN, BAYER_BLUE, BAYER_RED, BAYER_GREEN },
+	};
+
+	return colors[pattern][((y & 1) << 1) | (x & 1)];
+}
+
 static uint32_t debayer(const uint8_t *raw, unsigned int stride,
 			unsigned int width, unsigned int height,
-			int x, int y, int grbg)
+			int x, int y, enum bayer_pattern pattern)
 {
 	unsigned int p = sample(raw, stride, width, height, x, y);
 	unsigned int r, g, b;
-	int even_x = !(x & 1), even_y = !(y & 1);
-	int red = grbg ? (even_y && !even_x) : (even_y && even_x);
-	int blue = grbg ? (!even_y && even_x) : (!even_y && !even_x);
+	enum bayer_color color = bayer_color_at(pattern, x, y);
 
-	if (red) {
+	if (color == BAYER_RED) {
 		r = p;
 		g = (sample(raw, stride, width, height, x - 1, y) +
 		     sample(raw, stride, width, height, x + 1, y) +
@@ -91,7 +114,7 @@ static uint32_t debayer(const uint8_t *raw, unsigned int stride,
 		     sample(raw, stride, width, height, x + 1, y - 1) +
 		     sample(raw, stride, width, height, x - 1, y + 1) +
 		     sample(raw, stride, width, height, x + 1, y + 1)) / 4;
-	} else if (blue) {
+	} else if (color == BAYER_BLUE) {
 		b = p;
 		g = (sample(raw, stride, width, height, x - 1, y) +
 		     sample(raw, stride, width, height, x + 1, y) +
@@ -103,7 +126,7 @@ static uint32_t debayer(const uint8_t *raw, unsigned int stride,
 		     sample(raw, stride, width, height, x + 1, y + 1)) / 4;
 	} else {
 		g = p;
-		if ((grbg && even_y) || (!grbg && !even_y)) {
+		if (bayer_color_at(pattern, x - 1, y) == BAYER_RED) {
 			r = (sample(raw, stride, width, height, x - 1, y) +
 			     sample(raw, stride, width, height, x + 1, y)) / 2;
 			b = (sample(raw, stride, width, height, x, y - 1) +
@@ -122,7 +145,7 @@ static uint32_t debayer(const uint8_t *raw, unsigned int stride,
 static void render(uint8_t *shared, unsigned int screen_width,
 		   unsigned int screen_height, const uint8_t *raw,
 		   unsigned int raw_stride, unsigned int raw_width,
-		   unsigned int raw_height, int grbg, int mirror)
+		   unsigned int raw_height, enum bayer_pattern pattern, int mirror)
 {
 	uint32_t *pixels = (uint32_t *)(shared + sizeof(uint64_t));
 	unsigned int available_height = screen_height - HEADER_HEIGHT;
@@ -144,7 +167,7 @@ static void render(uint8_t *shared, unsigned int screen_width,
 				sy = raw_height - 1 - sy;
 			pixels[(size_t)(HEADER_HEIGHT + dy) * screen_width + x0 + dx] =
 				debayer(raw, raw_stride, raw_width, raw_height,
-					sx, sy, grbg);
+					sx, sy, pattern);
 		}
 	}
 	__atomic_add_fetch((uint64_t *)shared, 1, __ATOMIC_RELEASE);
@@ -152,16 +175,17 @@ static void render(uint8_t *shared, unsigned int screen_width,
 
 int main(int argc, char **argv)
 {
-	struct v4l2_format format = { .type = V4L2_BUF_TYPE_VIDEO_CAPTURE };
+	struct v4l2_format format = { .type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE };
 	struct v4l2_requestbuffers request = { .count = BUFFER_COUNT,
-		.type = V4L2_BUF_TYPE_VIDEO_CAPTURE, .memory = V4L2_MEMORY_MMAP };
+		.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE, .memory = V4L2_MEMORY_MMAP };
 	struct buffer buffers[BUFFER_COUNT] = {{0}};
 	struct stat shared_stat;
 	uint8_t *shared = MAP_FAILED;
 	unsigned int screen_width, screen_height, index;
 	uint32_t requested_fourcc;
-	int video_fd = -1, shared_fd = -1, grbg, mirror, result = EXIT_FAILURE;
-	enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	int video_fd = -1, shared_fd = -1, mirror, result = EXIT_FAILURE;
+	enum bayer_pattern pattern;
+	enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 
 	if (argc != 8) {
 		fprintf(stderr, "usage: %s VIDEO SHARED WIDTH HEIGHT FORMAT MIRROR FOURCC\n", argv[0]);
@@ -171,35 +195,49 @@ int main(int argc, char **argv)
 	screen_height = strtoul(argv[4], NULL, 10);
 	if (!screen_width || screen_height <= HEADER_HEIGHT)
 		return EXIT_FAILURE;
-	grbg = !strcmp(argv[5], "GRBG");
+	if (!strcmp(argv[5], "RGGB"))
+		pattern = BAYER_RGGB;
+	else if (!strcmp(argv[5], "GRBG"))
+		pattern = BAYER_GRBG;
+	else if (!strcmp(argv[5], "BGGR"))
+		pattern = BAYER_BGGR;
+	else if (!strcmp(argv[5], "GBRG"))
+		pattern = BAYER_GBRG;
+	else {
+		fprintf(stderr, "unsupported Bayer pattern: %s\n", argv[5]);
+		return EXIT_FAILURE;
+	}
 	mirror = atoi(argv[6]);
-	format.fmt.pix.width = 1920;
-	format.fmt.pix.height = 1080;
+	format.fmt.pix_mp.width = 1920;
+	format.fmt.pix_mp.height = 1080;
 	requested_fourcc = v4l2_fourcc(argv[7][0], argv[7][1], argv[7][2], argv[7][3]);
-	format.fmt.pix.pixelformat = requested_fourcc;
-	format.fmt.pix.field = V4L2_FIELD_NONE;
+	format.fmt.pix_mp.pixelformat = requested_fourcc;
+	format.fmt.pix_mp.field = V4L2_FIELD_NONE;
 
 	signal(SIGINT, stop_running);
 	signal(SIGTERM, stop_running);
 	video_fd = open(argv[1], O_RDWR | O_CLOEXEC | O_NONBLOCK);
 	if (video_fd < 0 || xioctl(video_fd, VIDIOC_S_FMT, &format) < 0 ||
-	    format.fmt.pix.width != 1920 || format.fmt.pix.height != 1080 ||
-	    format.fmt.pix.pixelformat != requested_fourcc) {
+	    format.fmt.pix_mp.width != 1920 || format.fmt.pix_mp.height != 1080 ||
+	    format.fmt.pix_mp.pixelformat != requested_fourcc ||
+	    format.fmt.pix_mp.num_planes != 1) {
 		perror("razer-camera-preview: video format");
 		goto out;
 	}
-	if (xioctl(video_fd, VIDIOC_REQBUFS, &request) < 0 || request.count < 2) {
+	if (xioctl(video_fd, VIDIOC_REQBUFS, &request) < 0 || request.count < 2 ||
+	    request.count > BUFFER_COUNT) {
 		perror("razer-camera-preview: request buffers");
 		goto out;
 	}
 	for (index = 0; index < request.count; index++) {
+		struct v4l2_plane planes[VIDEO_MAX_PLANES] = {{0}};
 		struct v4l2_buffer buffer = { .type = type, .memory = V4L2_MEMORY_MMAP,
-			.index = index };
+			.index = index, .length = VIDEO_MAX_PLANES, .m.planes = planes };
 		if (xioctl(video_fd, VIDIOC_QUERYBUF, &buffer) < 0)
 			goto out;
-		buffers[index].length = buffer.length;
-		buffers[index].data = mmap(NULL, buffer.length, PROT_READ,
-			MAP_SHARED, video_fd, buffer.m.offset);
+		buffers[index].length = planes[0].length;
+		buffers[index].data = mmap(NULL, planes[0].length, PROT_READ,
+			MAP_SHARED, video_fd, planes[0].m.mem_offset);
 		if (buffers[index].data == MAP_FAILED || xioctl(video_fd, VIDIOC_QBUF, &buffer) < 0)
 			goto out;
 	}
@@ -217,7 +255,9 @@ int main(int argc, char **argv)
 
 	while (running) {
 		struct pollfd poll_fd = { .fd = video_fd, .events = POLLIN };
-		struct v4l2_buffer buffer = { .type = type, .memory = V4L2_MEMORY_MMAP };
+		struct v4l2_plane planes[VIDEO_MAX_PLANES] = {{0}};
+		struct v4l2_buffer buffer = { .type = type, .memory = V4L2_MEMORY_MMAP,
+			.length = VIDEO_MAX_PLANES, .m.planes = planes };
 		if (poll(&poll_fd, 1, 1000) <= 0)
 			continue;
 		if (xioctl(video_fd, VIDIOC_DQBUF, &buffer) < 0) {
@@ -225,9 +265,11 @@ int main(int argc, char **argv)
 				continue;
 			break;
 		}
+		if (buffer.index >= request.count)
+			break;
 		render(shared, screen_width, screen_height, buffers[buffer.index].data,
-		       format.fmt.pix.bytesperline, format.fmt.pix.width,
-		       format.fmt.pix.height, grbg, mirror);
+		       format.fmt.pix_mp.plane_fmt[0].bytesperline, format.fmt.pix_mp.width,
+		       format.fmt.pix_mp.height, pattern, mirror);
 		if (xioctl(video_fd, VIDIOC_QBUF, &buffer) < 0)
 			break;
 	}
