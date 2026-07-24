@@ -203,6 +203,8 @@ if [ -d "$FIRMWARE_DIR" ] && [ "$(ls -A "$FIRMWARE_DIR" 2>/dev/null)" ]; then
 else
     echo "  NOTE: $FIRMWARE_DIR is empty; firmware sync skipped."
 fi
+bash "$PROJECT_DIR/scripts/install-wcn3990-firmware.sh" \
+    "$MOUNT_DIR/usr/lib/firmware"
 
 echo "  Installing repo-controlled ARM64 rootfs packages..."
 if [ -f "$ROOTFS_PACKAGES_DIR/tqftpserv_1.0-5_arm64.deb" ]; then

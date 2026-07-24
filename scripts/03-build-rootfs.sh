@@ -596,26 +596,15 @@ else
     exit 1
 fi
 
-# 7b: WCN3990 WiFi firmware from linux-firmware (open-source, no ROM needed).
-echo "  Downloading WCN3990 (ath10k) firmware from linux-firmware git..."
-LINUX_FW_BASE="https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain"
-ATH10K_DIR="$CHROOT_DIR/usr/lib/firmware/ath10k/WCN3990/hw1.0"
-mkdir -p "$ATH10K_DIR"
-
-for fw_file in firmware-5.bin board.bin board-2.bin; do
-    if [ -s "$ATH10K_DIR/$fw_file" ]; then
-        echo "  Keeping existing $fw_file ($(du -h "$ATH10K_DIR/$fw_file" | cut -f1))"
-    elif wget -q --timeout=30 -O "$ATH10K_DIR/$fw_file" \
-            "${LINUX_FW_BASE}/ath10k/WCN3990/hw1.0/${fw_file}"; then
-        echo "  Downloaded $fw_file ($(du -h "$ATH10K_DIR/$fw_file" | cut -f1))"
-    else
-        echo "  WARNING: Failed to download $fw_file - WiFi may not work"
-        rm -f "$ATH10K_DIR/$fw_file"
-    fi
-done
+# 7b: Factory firmware supplies board data, while mainline ath10k also needs
+# the upstream firmware-5.bin API file. Keep the full and cached build paths on
+# the same pinned, fail-closed installer.
+bash "$PROJECT_DIR/scripts/install-wcn3990-firmware.sh" \
+    "$CHROOT_DIR/usr/lib/firmware"
 
 # 7c: Adreno 630 firmware (a630_gmu.bin) from linux-firmware.
 #     The GPU zap shader (a630_zap.mbn) still needs the stock ROM.
+LINUX_FW_BASE="https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain"
 ADRENO_DIR="$CHROOT_DIR/usr/lib/firmware/qcom"
 mkdir -p "$ADRENO_DIR"
 if wget -q --timeout=30 -O "$ADRENO_DIR/a630_gmu.bin" \
