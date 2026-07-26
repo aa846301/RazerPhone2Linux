@@ -10,6 +10,12 @@ presenter and installs it over SSH after flashing:
 powershell -ExecutionPolicy Bypass -File experiments\razer-control-panel\deploy.ps1
 ```
 
+By default the same command uses the Windows Go toolchain to test and
+cross-compile the adjacent `crypto_dashboard` checkout for `linux/arm64`, then
+deploys its binary, `config.json`, `web/`, and migrations under
+`/opt/crypto-dashboard`. Use `-CryptoDashboardPath` to select another checkout,
+or `-SkipCryptoDashboard` to deploy only the hardware panel.
+
 Pass the phone's current WiFi address with `-HostName`, for example
 `-HostName 10.1.3.110`, to deploy over WiFi instead of the default USB NCM
 address. On the live test device, it disables `razer-panel-idle-blank.service`
@@ -34,7 +40,13 @@ The deployed files on the phone are:
 /usr/local/sbin/razer-audio-test
 /usr/local/sbin/razer-shutdown-console
 /etc/systemd/system/razer-control-panel.service
+/etc/systemd/system/crypto-dashboard.service
 ```
+
+When `/opt/crypto-dashboard/crypto-dashboard` and `config.json` are installed,
+the `CRYPTO` page can start, restart, stop, and inspect the journal of the
+independent `crypto-dashboard.service`. Returning to the main panel leaves the
+server running.
 
 Check or restart it manually over SSH with:
 

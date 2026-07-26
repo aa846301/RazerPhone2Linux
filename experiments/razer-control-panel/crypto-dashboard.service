@@ -1,0 +1,24 @@
+[Unit]
+Description=Crypto arbitrage dashboard
+Wants=network-online.target
+After=network-online.target NetworkManager.service
+ConditionFileIsExecutable=/opt/crypto-dashboard/crypto-dashboard
+ConditionPathExists=/opt/crypto-dashboard/config.json
+
+[Service]
+Type=simple
+User=klipper
+Group=klipper
+WorkingDirectory=/opt/crypto-dashboard
+Environment=CONFIG_PATH=/opt/crypto-dashboard/config.json
+ExecStart=/opt/crypto-dashboard/crypto-dashboard
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/crypto-dashboard
+
+[Install]
+WantedBy=multi-user.target

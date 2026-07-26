@@ -85,6 +85,28 @@ ssh-keygen -t ed25519 -f C:\tmp\razer_usb_ed25519
 powershell -ExecutionPolicy Bypass -File experiments\razer-control-panel\deploy.ps1
 ```
 
+部署腳本預設會從相鄰的 `D:\repos\crypto_dashboard`：
+
+1. 使用 Windows Go 執行 `go test ./...`。
+2. 交叉編譯 `linux/arm64` server。
+3. 複製 binary、`config.json`、`web/` 與 `db/migrations/`。
+4. 安裝到手機 `/opt/crypto-dashboard` 並啟動
+   `crypto-dashboard.service`。
+
+若 repository 位於其他位置：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File experiments\razer-control-panel\deploy.ps1 `
+  -CryptoDashboardPath D:\path\to\crypto_dashboard
+```
+
+只更新硬體測試面板、不部署 Crypto Dashboard：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File experiments\razer-control-panel\deploy.ps1 `
+  -SkipCryptoDashboard
+```
+
 透過 WiFi 部署：
 
 ```powershell
@@ -118,6 +140,28 @@ powershell -ExecutionPolicy Bypass -File experiments\razer-control-panel\deploy.
 
 部署完成後，手機應直接顯示測試面板。面板會自行在 60 秒後 blank，觸控可
 喚醒螢幕。
+
+### Crypto Dashboard 控制頁
+
+若 `/opt/crypto-dashboard/crypto-dashboard` 與
+`/opt/crypto-dashboard/config.json` 已部署，主畫面右上角會有 `CRYPTO`
+按鈕。控制頁提供：
+
+- `START`：啟動 `crypto-dashboard.service`。
+- `RESTART`：重新啟動服務。
+- `LOG`：顯示服務最近的 systemd journal，`BACK` 可回控制頁。
+- `STOP`：在面板外部停止服務與交易所 feeds。
+- `BACK`：回到原本電源／硬體測試畫面，不會停止 Crypto Dashboard。
+
+服務以 `klipper` 使用者執行，working directory 是
+`/opt/crypto-dashboard`。Web UI 的實際網址會依 `config.json` 的
+`server.port` 顯示在控制頁；也可以透過 SSH 管理：
+
+```bash
+sudo systemctl start crypto-dashboard.service
+sudo systemctl stop crypto-dashboard.service
+sudo journalctl -fu crypto-dashboard.service
+```
 
 ## 4. 查看服務與錯誤
 

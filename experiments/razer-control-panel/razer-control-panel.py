@@ -2,6 +2,7 @@
 """Experimental charging and WiFi panel for the Razer Phone 2 framebuffer."""
 
 import glob
+import json
 import mmap
 import os
 import select
@@ -17,6 +18,8 @@ KMS_HELPER = "/usr/local/sbin/razer-kms-present"
 CAMERA_LAUNCHER = "/usr/local/sbin/razer-camera-launch"
 HAPTIC_TEST = "/usr/local/sbin/razer-haptic-test"
 AUDIO_TEST = "/usr/local/sbin/razer-audio-test"
+CRYPTO_SERVICE = "crypto-dashboard.service"
+CRYPTO_CONFIG = "/opt/crypto-dashboard/config.json"
 SHARED_FRAME = "/run/razer-control-panel.frame"
 CAMERA_CAPTURE_STATUS = "/run/razer-camera-capture.last"
 MANUAL_CHARGE_MARKER = "/var/lib/razer-control-panel/charge-to-full"
@@ -411,6 +414,7 @@ class ControlPanel:
         data = self.metrics()
         ssid, address = self.wifi_info()
         self.draw_header("POWER PANEL")
+        self.add_button(950, 45, 420, 120, "CRYPTO", "crypto", "cyan", 6)
         power_color = COLORS["green"] if data["power"] > 0.05 else COLORS["amber"]
         power_text = f'{data["power"]:.2f} W' if data["metered"] else "METER N/A"
         self.fb.text(self.fb.width // 2, 330, power_text, 20,
@@ -450,6 +454,80 @@ class ControlPanel:
         if self.message:
             self.fb.text(self.fb.width // 2, 2460, self.message, 5,
                          COLORS["amber"], center=True, max_chars=34)
+
+    def crypto_state(self):
+        result = run(["systemctl", "is-active", CRYPTO_SERVICE], timeout=4)
+        state = (result.stdout.strip() or "inactive").upper()
+        if state == "UNKNOWN":
+            state = "NOT INSTALLED"
+        return state
+
+    @staticmethod
+    def crypto_port():
+        try:
+            with open(CRYPTO_CONFIG, "r", encoding="utf-8") as handle:
+                return int(json.load(handle).get("server", {}).get("port", 8080))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return 8080
+
+    def crypto_address(self):
+        _, wifi_address = self.wifi_info()
+        address = wifi_address or "192.168.137.133"
+        return f"HTTP://{address}:{self.crypto_port()}"
+
+    def crypto_logs(self, count=27):
+        result = run(["journalctl", "-u", CRYPTO_SERVICE, "--no-pager",
+                      "-n", str(count), "-o", "cat"], timeout=5)
+        text = result.stdout if result.returncode == 0 else result.stderr
+        lines = []
+        for raw_line in text.splitlines():
+            clean = "".join(char if 32 <= ord(char) < 127 else "?" for char in raw_line)
+            if clean.strip():
+                lines.append(clean.strip())
+        return lines[-count:] or ["NO LOG ENTRIES"]
+
+    def draw_crypto(self):
+        state = self.crypto_state()
+        running = state == "ACTIVE"
+        self.draw_header("CRYPTO DASH")
+        self.add_button(1050, 45, 320, 120, "BACK", "dashboard", "panel2", 6)
+        self.fb.text(self.fb.width // 2, 360, state, 16,
+                     COLORS["green"] if running else COLORS["amber"], center=True)
+        self.fb.text(self.fb.width // 2, 570, self.crypto_address(), 7,
+                     COLORS["text"], center=True, max_chars=31)
+        self.fb.text(self.fb.width // 2, 690, "BACK KEEPS SERVER RUNNING", 5,
+                     COLORS["muted"], center=True)
+        self.add_button(70, 880, 620, 210, "START", "crypto_start", "green", 9)
+        self.add_button(750, 880, 620, 210, "RESTART", "crypto_restart", "amber", 7)
+        self.add_button(70, 1140, 620, 210, "LOG", "crypto_log", "cyan", 10)
+        self.add_button(750, 1140, 620, 210, "STOP", "crypto_stop", "red", 10)
+        self.fb.rect(70, 1450, 1300, 650, COLORS["panel"])
+        details = [
+            "SERVICE: CRYPTO-DASHBOARD",
+            f"CONFIG: {CRYPTO_CONFIG}",
+            "DATA: /OPT/CRYPTO-DASHBOARD/DATA",
+            "WEB UI: OPEN URL FROM ANOTHER DEVICE",
+            "STOP ENDS SERVER AND EXCHANGE FEEDS",
+        ]
+        y = 1510
+        for detail in details:
+            self.fb.text(110, y, detail, 5, COLORS["muted"], max_chars=39)
+            y += 105
+        if self.message:
+            self.fb.text(self.fb.width // 2, 2300, self.message, 5,
+                         COLORS["amber"], center=True, max_chars=38)
+
+    def draw_crypto_log(self):
+        self.draw_header("CRYPTO LOG")
+        self.add_button(1050, 45, 320, 120, "BACK", "crypto", "panel2", 6)
+        y = 250
+        for line in self.crypto_logs():
+            self.fb.text(55, y, line, 4, COLORS["text"], max_chars=55)
+            y += 72
+            if y > 2190:
+                break
+        self.add_button(70, 2290, 620, 180, "REFRESH", "crypto_log", "cyan", 7)
+        self.add_button(750, 2290, 620, 180, "STOP", "crypto_stop", "red", 9)
 
     def draw_camera(self):
         self.draw_header(self.camera_name)
@@ -561,6 +639,10 @@ class ControlPanel:
             self.draw_wifi()
         elif self.page == "camera":
             self.draw_camera()
+        elif self.page == "crypto":
+            self.draw_crypto()
+        elif self.page == "crypto_log":
+            self.draw_crypto_log()
         else:
             self.draw_keyboard()
         self.fb.present()
@@ -694,11 +776,35 @@ class ControlPanel:
         self.message = self.test_result(result, "CHECK PHONE SPEAKERS", "SOUND FAILED")
         print(f"audio result={result.returncode} message={self.message}", flush=True)
 
+    def control_crypto(self, operation):
+        self.message = f"{operation.upper()} CRYPTO SERVER"
+        self.draw()
+        result = run(["systemctl", operation, CRYPTO_SERVICE], timeout=20)
+        if result.returncode == 0:
+            state = self.crypto_state()
+            self.message = f"CRYPTO SERVER {state}"
+        else:
+            self.message = self.test_result(result, "", "CRYPTO CONTROL FAILED")
+        print(f"crypto operation={operation} result={result.returncode} "
+              f"message={self.message}", flush=True)
+
     def action(self, action):
         self.last_touch = time.monotonic()
         if action == "wifi":
             self.page = "wifi"
             self.scan_wifi()
+        elif action == "crypto":
+            self.page = "crypto"
+            self.message = ""
+        elif action == "crypto_log":
+            self.page = "crypto_log"
+            self.message = ""
+        elif action == "crypto_start":
+            self.control_crypto("start")
+        elif action == "crypto_restart":
+            self.control_crypto("restart")
+        elif action == "crypto_stop":
+            self.control_crypto("stop")
         elif action == "dashboard":
             self.stop_camera()
             self.page = "dashboard"
@@ -809,7 +915,11 @@ class ControlPanel:
                 self.draw()
             if self.screen_on and self.page != "camera" and now - self.last_touch >= IDLE_SECONDS:
                 self.set_screen(False)
-            elif self.screen_on and self.page == "dashboard" and now - self.last_refresh >= 2:
+            elif (self.screen_on and self.page in ("dashboard", "crypto") and
+                  now - self.last_refresh >= 2):
+                self.draw()
+            elif (self.screen_on and self.page == "crypto_log" and
+                  now - self.last_refresh >= 3):
                 self.draw()
 
     def close(self):
