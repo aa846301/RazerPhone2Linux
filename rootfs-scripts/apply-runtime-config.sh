@@ -216,7 +216,14 @@ After=rmtfs.service pd-mapper.service tqftpserv.service qrtr-ns.service razer-wi
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/true
-ExecStop=/bin/sh -c 'for r in /sys/class/remoteproc/remoteproc*; do [ "$(cat $r/state 2>/dev/null)" = "running" ] && echo stop > $r/state 2>/dev/null; done; true'
+# Stop only MSS (4080000.remoteproc), the remoteproc that depends on rmtfs.
+# Stopping ADSP deadlocks the kernel (2026-11-09, sysrq-w on the panel):
+# qcom_slim_ngd_ssr_pdr_notify() holds the NGD tx_lock while reporting
+# WCD9340 absent; its SoundWire child is runtime-resumed during removal,
+# clk_prepare() takes the global clk prepare_lock and swclk_gate_enable()
+# then needs the same tx_lock for a SLIMbus write. The held prepare_lock
+# stalls cpufreq and UFS, so every writer blocked and shutdown took 15+ min.
+ExecStop=/bin/sh -c 'for r in /sys/class/remoteproc/remoteproc*; do [ "$(cat $r/name 2>/dev/null)" = "4080000.remoteproc" ] && [ "$(cat $r/state 2>/dev/null)" = "running" ] && echo stop > $r/state 2>/dev/null; done; true'
 TimeoutStopSec=20
 
 [Install]

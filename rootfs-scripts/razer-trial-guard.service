@@ -1,0 +1,10 @@
+[Unit]
+Description=Reboot unconfirmed Razer kexec trial boots back to boot_a
+ConditionKernelCommandLine=razer.trial
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/razer-trial-guard
+
+[Install]
+WantedBy=multi-user.target

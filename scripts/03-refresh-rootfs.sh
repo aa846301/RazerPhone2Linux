@@ -166,6 +166,38 @@ ln -sf ../razer-panel-idle-blank.service \
     "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/razer-panel-idle-blank.service"
 ln -sf ../razer-shutdown-prepare.service \
     "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/razer-shutdown-prepare.service"
+# Remote, partition-free test boots: kexec trial plus a guard that reboots to
+# boot_a unless the trial is confirmed. See doc/remote-test-boot-2026-11-08.md.
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/razer-kexec-trial.sh" \
+    "$MOUNT_DIR/usr/local/sbin/razer-kexec-trial"
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/razer-trial-guard.sh" \
+    "$MOUNT_DIR/usr/local/sbin/razer-trial-guard"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-trial-guard.service" \
+    "$MOUNT_DIR/etc/systemd/system/razer-trial-guard.service"
+ln -sf ../razer-trial-guard.service \
+    "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/razer-trial-guard.service"
+# WiFi self-heal: reconnect -> reload ath10k -> graceful reboot -> sysrq-b,
+# with a boot-loop guard. See rootfs-scripts/razer-net-watchdog.sh.
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/razer-net-watchdog.sh" \
+    "$MOUNT_DIR/usr/local/sbin/razer-net-watchdog"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-net-watchdog.service" \
+    "$MOUNT_DIR/etc/systemd/system/razer-net-watchdog.service"
+ln -sf ../razer-net-watchdog.service \
+    "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/razer-net-watchdog.service"
+# Flush the journal often so a boot that later stalls still leaves logs.
+install -D -m 0644 /dev/stdin "$MOUNT_DIR/etc/systemd/journald.conf.d/90-razer-sync.conf" <<'EOF'
+[Journal]
+Storage=persistent
+SyncIntervalSec=15s
+EOF
+install -D -m 0755 \
+    "$PROJECT_DIR/tools/bootimg-swap-dtb.py" \
+    "$MOUNT_DIR/usr/local/sbin/bootimg-swap-dtb"
 install -D -m 0755 \
     "$PROJECT_DIR/rootfs-scripts/razer-panel-colortest.py" \
     "$MOUNT_DIR/usr/local/sbin/razer-panel-colortest"

@@ -753,6 +753,293 @@
 };
 
 /*
+ * qcom-cpufreq-hw is built in but the LMh irqchip (CONFIG_QCOM_LMH=m) loads
+ * later from the rootfs. When cpufreq-hw probes first, every policy init
+ * gets -EPROBE_DEFER from platform_get_irq_optional(), cpufreq_register_driver()
+ * returns -ENODEV and the driver never retries: no DVFS for the whole boot
+ * (seen on 2 of 4 boots, 2026-11-09). Rebinding at runtime is unsafe (stale
+ * OPP clk handles spin under prepare_lock and stall UFS). Dropping the LMh
+ * interrupts makes cpufreq deterministic; the OSM/LMh hardware still
+ * throttles on its own, only the kernel's thermal-pressure feedback is lost.
+ */
+&cpufreq_hw {
+	/delete-property/ interrupts-extended;
+};
+
+/*
+ * Software CPU thermal control. Mainline sdm845.dtsi has no cooling-maps on the
+ * cpuN-thermal zones and relies on LMh, which only clamps at 95 C; a sustained
+ * LLM load reached ~97 C (2026-11-09). Throttle the cluster from 80 C and
+ * harder from 88 C via the cpufreq cooling devices (verified: 80-91 C under
+ * 4-minute full load, 1.5-2.1 GHz). Same nodes as tools/dts-add-cpu-cooling.py.
+ */
+&{/thermal-zones/cpu0-thermal} {
+	trips {
+		cpu0_razer_warm: trip-razer-warm {
+			temperature = <80000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+
+		cpu0_razer_hot: trip-razer-hot {
+			temperature = <88000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+	};
+
+	cooling-maps {
+		map-razer-warm {
+			trip = <&cpu0_razer_warm>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map-razer-hot {
+			trip = <&cpu0_razer_hot>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+&{/thermal-zones/cpu1-thermal} {
+	trips {
+		cpu1_razer_warm: trip-razer-warm {
+			temperature = <80000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+
+		cpu1_razer_hot: trip-razer-hot {
+			temperature = <88000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+	};
+
+	cooling-maps {
+		map-razer-warm {
+			trip = <&cpu1_razer_warm>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map-razer-hot {
+			trip = <&cpu1_razer_hot>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+&{/thermal-zones/cpu2-thermal} {
+	trips {
+		cpu2_razer_warm: trip-razer-warm {
+			temperature = <80000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+
+		cpu2_razer_hot: trip-razer-hot {
+			temperature = <88000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+	};
+
+	cooling-maps {
+		map-razer-warm {
+			trip = <&cpu2_razer_warm>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map-razer-hot {
+			trip = <&cpu2_razer_hot>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+&{/thermal-zones/cpu3-thermal} {
+	trips {
+		cpu3_razer_warm: trip-razer-warm {
+			temperature = <80000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+
+		cpu3_razer_hot: trip-razer-hot {
+			temperature = <88000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+	};
+
+	cooling-maps {
+		map-razer-warm {
+			trip = <&cpu3_razer_warm>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map-razer-hot {
+			trip = <&cpu3_razer_hot>;
+			cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+&{/thermal-zones/cpu4-thermal} {
+	trips {
+		cpu4_razer_warm: trip-razer-warm {
+			temperature = <80000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+
+		cpu4_razer_hot: trip-razer-hot {
+			temperature = <88000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+	};
+
+	cooling-maps {
+		map-razer-warm {
+			trip = <&cpu4_razer_warm>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map-razer-hot {
+			trip = <&cpu4_razer_hot>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+&{/thermal-zones/cpu5-thermal} {
+	trips {
+		cpu5_razer_warm: trip-razer-warm {
+			temperature = <80000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+
+		cpu5_razer_hot: trip-razer-hot {
+			temperature = <88000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+	};
+
+	cooling-maps {
+		map-razer-warm {
+			trip = <&cpu5_razer_warm>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map-razer-hot {
+			trip = <&cpu5_razer_hot>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+&{/thermal-zones/cpu6-thermal} {
+	trips {
+		cpu6_razer_warm: trip-razer-warm {
+			temperature = <80000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+
+		cpu6_razer_hot: trip-razer-hot {
+			temperature = <88000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+	};
+
+	cooling-maps {
+		map-razer-warm {
+			trip = <&cpu6_razer_warm>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map-razer-hot {
+			trip = <&cpu6_razer_hot>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+&{/thermal-zones/cpu7-thermal} {
+	trips {
+		cpu7_razer_warm: trip-razer-warm {
+			temperature = <80000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+
+		cpu7_razer_hot: trip-razer-hot {
+			temperature = <88000>;
+			hysteresis = <2000>;
+			type = "passive";
+		};
+	};
+
+	cooling-maps {
+		map-razer-warm {
+			trip = <&cpu7_razer_warm>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+
+		map-razer-hot {
+			trip = <&cpu7_razer_hot>;
+			cooling-device = <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+					 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+		};
+	};
+};
+
+
+/*
  * ==========================================================================
  * Display/GPU clocks
  * ==========================================================================
@@ -1327,12 +1614,17 @@
 	pinctrl-names = "default";
 	status = "okay";
 
+	/*
+	 * Razer SMR7 sdm845-audio_rc2-evb.dtsi wires three digital microphones
+	 * to WCD9340 DMIC1/DMIC3/DMIC5, powered by MIC BIAS1/3/4. The previous
+	 * generic AMIC routes did not match this board; with them, DMIC capture
+	 * streamed (SLIM TX running) but returned all-zero samples because no
+	 * bias supply was ever powered.
+	 */
 	audio-routing = "RX_BIAS", "MCLK",
-			"AMIC1", "MIC BIAS3",
-			"AMIC2", "MIC BIAS2",
-			"AMIC3", "MIC BIAS4",
-			"AMIC4", "MIC BIAS1",
-			"AMIC5", "MIC BIAS3";
+			"DMIC1", "MIC BIAS1",
+			"DMIC3", "MIC BIAS3",
+			"DMIC5", "MIC BIAS4";
 
 	mm1-dai-link {
 		link-name = "MultiMedia1";

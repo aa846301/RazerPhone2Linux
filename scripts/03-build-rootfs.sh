@@ -334,6 +334,9 @@ echo "root:$ROOTFS_USER_PASSWORD" | chpasswd
 # Install essential packages
 # rmtfs: Qualcomm remote filesystem daemon - modem/WiFi firmware loader depends on this
 # qrtr-tools: Qualcomm IPC Router - required by ath10k_snoc and modem subsystem
+# kexec-tools is only for explicit razer-kexec-trial test boots; ordinary
+# reboots must still go through ABL and boot_a.
+echo "kexec-tools kexec-tools/load_kexec boolean false" | debconf-set-selections
 apt install -y \
     bash-completion \
     nano vim \
@@ -355,6 +358,7 @@ apt install -y \
     usbutils pciutils \
     evtest joystick \
 	alsa-utils v4l-utils \
+    kexec-tools device-tree-compiler \
     htop \
     ca-certificates \
     gnupg \

@@ -1,0 +1,16 @@
+[Unit]
+Description=Razer Phone 2 WiFi self-heal watchdog (reconnect, reload, reboot)
+After=NetworkManager.service razer-wifi-ready.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/razer-net-watchdog
+Restart=always
+RestartSec=10
+# keep it alive and in memory under pressure; it must survive I/O stalls
+OOMScoreAdjust=-900
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target
