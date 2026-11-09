@@ -1,0 +1,1 @@
+{"id": 201, "cat": "single", "text": "幫我把窗簾打開", "expect": [["cover.bedroom_curtain", "open"]], "note": "使用者提供（2026-11-09）；模擬狀態窗簾已開，驗證器會去掉，期望空動作"}

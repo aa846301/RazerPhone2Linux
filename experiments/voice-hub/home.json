@@ -1,0 +1,35 @@
+{
+  "_comment": "Mock Home Assistant registry for offline NLU tests. Replace with an export from the real HA (/api/states) once a token is available. Status: 測試用模擬資料，不是實際家中設備。",
+  "areas": {
+    "living_room": ["客廳"],
+    "bedroom": ["臥室", "房間", "主臥"],
+    "kitchen": ["廚房"]
+  },
+  "entities": [
+    {"entity_id": "light.living_main", "name": "客廳主燈", "aliases": ["客廳大燈"], "area": "living_room", "domain": "light", "features": ["brightness"], "allowed": true},
+    {"entity_id": "light.living_strip", "name": "客廳燈條", "aliases": ["電視燈條", "氣氛燈"], "area": "living_room", "domain": "light", "features": ["brightness"], "allowed": true},
+    {"entity_id": "light.bedroom_ceiling", "name": "臥室吸頂燈", "aliases": ["臥室大燈", "房間大燈"], "area": "bedroom", "domain": "light", "features": ["brightness"], "allowed": true},
+    {"entity_id": "light.bedside", "name": "床頭燈", "aliases": ["床邊的燈"], "area": "bedroom", "domain": "light", "features": ["brightness"], "allowed": true},
+    {"entity_id": "light.night_light", "name": "小夜燈", "aliases": ["小燈"], "area": "bedroom", "domain": "light", "features": [], "allowed": true},
+    {"entity_id": "light.kitchen", "name": "廚房燈", "aliases": [], "area": "kitchen", "domain": "light", "features": [], "allowed": true},
+    {"entity_id": "climate.living_ac", "name": "客廳冷氣", "aliases": ["客廳空調"], "area": "living_room", "domain": "climate", "features": ["temperature"], "min_temp": 16, "max_temp": 30, "allowed": true},
+    {"entity_id": "climate.bedroom_ac", "name": "臥室冷氣", "aliases": ["房間冷氣"], "area": "bedroom", "domain": "climate", "features": ["temperature"], "min_temp": 16, "max_temp": 30, "allowed": true},
+    {"entity_id": "fan.living", "name": "客廳電風扇", "aliases": ["風扇", "電扇"], "area": "living_room", "domain": "fan", "features": ["percentage"], "allowed": true},
+    {"entity_id": "cover.bedroom_curtain", "name": "臥室窗簾", "aliases": ["窗簾"], "area": "bedroom", "domain": "cover", "features": ["position"], "allowed": true},
+    {"entity_id": "lock.front_door", "name": "大門門鎖", "aliases": ["大門", "門鎖"], "area": null, "domain": "lock", "features": [], "allowed": true, "confirm": true},
+    {"entity_id": "switch.water_heater", "name": "熱水器", "aliases": [], "area": null, "domain": "switch", "features": [], "allowed": false}
+  ],
+  "state": {
+    "light.living_main": {"state": "on", "brightness_pct": 40},
+    "light.living_strip": {"state": "on", "brightness_pct": 60},
+    "light.bedroom_ceiling": {"state": "on", "brightness_pct": 80},
+    "light.bedside": {"state": "on", "brightness_pct": 50},
+    "light.night_light": {"state": "off"},
+    "light.kitchen": {"state": "on"},
+    "climate.living_ac": {"state": "cool", "temperature": 25},
+    "climate.bedroom_ac": {"state": "off", "temperature": 27},
+    "fan.living": {"state": "off", "percentage": 0},
+    "cover.bedroom_curtain": {"state": "open", "position": 100},
+    "lock.front_door": {"state": "locked"}
+  }
+}

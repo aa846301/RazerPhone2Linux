@@ -1,0 +1,40 @@
+{"id": 301, "cat": "indirect", "text": "客廳好暗喔", "expect": [["light.living_main", "adjust_brightness", 20]], "accept_extra_entities": ["light.living_strip"], "accept_clarify": true}
+{"id": 302, "cat": "indirect", "text": "房間好熱", "expect": [["climate.bedroom_ac", "turn_on"]], "accept_clarify": true}
+{"id": 303, "cat": "indirect", "text": "燈太亮了，臥室的", "expect": [["light.bedroom_ceiling", "adjust_brightness", -20], ["light.bedside", "adjust_brightness", -20]], "accept_clarify": true}
+{"id": 304, "cat": "relative", "text": "幫我把冷氣開強一點", "expect": [["climate.living_ac", "adjust_temperature", -1]], "accept_clarify": true, "note": "只有客廳冷氣在運轉"}
+{"id": 305, "cat": "single", "text": "客廳冷氣溫度調到最低", "expect": [["climate.living_ac", "set_temperature", 16]]}
+{"id": 306, "cat": "multi", "text": "臥室冷氣二十八度，然後窗簾關一半", "expect": [["climate.bedroom_ac", "set_temperature", 28], ["cover.bedroom_curtain", "set_position", 50]]}
+{"id": 307, "cat": "multi", "text": "把客廳主燈跟燈條都調到百分之五十", "expect": [["light.living_main", "set_brightness", 50], ["light.living_strip", "set_brightness", 50]]}
+{"id": 308, "cat": "scene", "text": "我要看電影了，客廳燈光調暗一點", "expect": [["light.living_main", "adjust_brightness", -20], ["light.living_strip", "adjust_brightness", -20]]}
+{"id": 309, "cat": "scene", "text": "起床了，臥室大燈調亮", "expect": [["light.bedroom_ceiling", "adjust_brightness", 20]]}
+{"id": 310, "cat": "exclusion", "text": "不要關小夜燈，其他臥室的燈關掉", "expect": [["light.bedroom_ceiling", "turn_off"], ["light.bedside", "turn_off"]]}
+{"id": 311, "cat": "correction", "text": "關掉客廳主燈，不對，是床頭燈", "expect": [["light.bedside", "turn_off"]]}
+{"id": 312, "cat": "unsupported", "text": "十分鐘後把電扇關掉", "expect_reject": true, "note": "尚未支援排程，不能立即執行"}
+{"id": 313, "cat": "single", "text": "電扇開到三十", "expect": [["fan.living", "set_percentage", 30]]}
+{"id": 314, "cat": "ambiguous_off", "text": "冷氣不用開了", "expect": [["climate.living_ac", "turn_off"]], "accept_clarify": true}
+{"id": 315, "cat": "query", "text": "請問客廳冷氣現在幾度", "expect_reject": true, "note": "查詢不是控制，不可產生動作"}
+{"id": 316, "cat": "all", "text": "把所有的燈都打開", "expect": [["light.living_main", "turn_on"], ["light.living_strip", "turn_on"], ["light.bedroom_ceiling", "turn_on"], ["light.bedside", "turn_on"], ["light.night_light", "turn_on"], ["light.kitchen", "turn_on"]]}
+{"id": 317, "cat": "multi", "text": "廚房跟客廳的燈全部關掉", "expect": [["light.kitchen", "turn_off"], ["light.living_main", "turn_off"], ["light.living_strip", "turn_off"]]}
+{"id": 318, "cat": "confirm", "text": "門鎖打開", "expect": [["lock.front_door", "unlock"]], "expect_confirm": true}
+{"id": 319, "cat": "query", "text": "大門有沒有鎖", "expect_reject": true}
+{"id": 320, "cat": "unsupported", "text": "幫我把客廳的冷氣調成除濕", "expect_reject": true, "note": "模式切換尚未支援"}
+{"id": 321, "cat": "short_name", "text": "主燈亮度六十", "expect": [["light.living_main", "set_brightness", 60]]}
+{"id": 322, "cat": "short_name", "text": "吸頂燈關掉", "expect": [["light.bedroom_ceiling", "turn_off"]]}
+{"id": 323, "cat": "ambiguous", "text": "空調開二十六", "expect_clarify": true}
+{"id": 324, "cat": "synonym", "text": "電視燈條關掉", "expect": [["light.living_strip", "turn_off"]]}
+{"id": 325, "cat": "single", "text": "氣氛燈調到最暗", "expect": [["light.living_strip", "set_brightness", 1]], "accept_clarify": true}
+{"id": 326, "cat": "single", "text": "風扇風速開到最大", "expect": [["fan.living", "set_percentage", 100]]}
+{"id": 327, "cat": "scene", "text": "晚安", "expect_reject": true, "note": "尚未定義場景，不可猜"}
+{"id": 328, "cat": "multi", "text": "臥室的冷氣幫我打開，二十六度", "expect": [["climate.bedroom_ac", "turn_on"], ["climate.bedroom_ac", "set_temperature", 26]], "alt": [[["climate.bedroom_ac", "set_temperature", 26]]]}
+{"id": 329, "cat": "fragment", "text": "客廳的燈", "expect_clarify": true}
+{"id": 330, "cat": "query", "text": "洗衣機洗好了沒", "expect_reject": true}
+{"id": 331, "cat": "multi", "text": "把臥室窗簾拉上，順便把床頭燈調到百分之二十", "expect": [["cover.bedroom_curtain", "close"], ["light.bedside", "set_brightness", 20]]}
+{"id": 332, "cat": "relative", "text": "冷氣調低兩度", "expect": [["climate.living_ac", "adjust_temperature", -2]], "accept_clarify": true}
+{"id": 333, "cat": "asr_error", "text": "客聽的燈全部關掉", "expect": [["light.living_main", "turn_off"], ["light.living_strip", "turn_off"]]}
+{"id": 334, "cat": "unknown_area_word", "text": "臥房大燈關掉", "expect": [["light.bedroom_ceiling", "turn_off"]], "note": "「臥房」不在區域別名裡"}
+{"id": 335, "cat": "synonym", "text": "主臥冷氣開二十五度", "expect": [["climate.bedroom_ac", "set_temperature", 25]]}
+{"id": 336, "cat": "colloquial", "text": "電扇停掉", "expect": [["fan.living", "turn_off"]], "note": "電扇已關，驗證器去掉後是空動作"}
+{"id": 337, "cat": "nonexistent", "text": "幫我開空氣清淨機", "expect_reject": true}
+{"id": 338, "cat": "indirect", "text": "我好冷", "expect": [["climate.living_ac", "adjust_temperature", 1]], "accept_clarify": true}
+{"id": 339, "cat": "unsupported", "text": "把客廳主燈調成暖色", "expect_reject": true, "note": "沒有色溫功能"}
+{"id": 340, "cat": "ambiguous", "text": "全部關掉", "expect_clarify": true}
