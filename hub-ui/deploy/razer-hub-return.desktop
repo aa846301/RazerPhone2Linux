@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=返回中控台
+Name[en]=Back to hub
+Comment=關閉除錯桌面，回到 Razer 中控台
+Exec=sudo -n systemd-run --collect --unit=razer-desktop-switch /usr/local/sbin/razer-desktop hub
+Icon=go-home
+Terminal=false
+Categories=System;

@@ -1,0 +1,25 @@
+#!/bin/bash
+# Keep the hub UI running inside the sway session: restart on crash, back off after repeated crashes.
+# Log persists across reboots in ~/.local/state/razer-hub/hub-ui.log (rotated at 2 MB).
+BIN="${HUB_UI_BIN:-$HOME/hub-ui/target/release/hub-ui}"
+LOGDIR="$HOME/.local/state/razer-hub"
+LOG="$LOGDIR/hub-ui.log"
+mkdir -p "$LOGDIR"
+fails=0
+while true; do
+  if [ -f "$LOG" ] && [ "$(stat -c %s "$LOG")" -gt 2097152 ]; then mv -f "$LOG" "$LOG.1"; fi
+  start=$(date +%s)
+  "$BIN" >>"$LOG" 2>&1
+  rc=$?
+  if [ $(( $(date +%s) - start )) -lt 20 ]; then fails=$((fails + 1)); else fails=0; fi
+  echo "$(date '+%F %T') hub-ui exited rc=$rc (fast fails: $fails)" >>"$LOG"
+  if [ $fails -ge 5 ]; then
+    # Keeps crashing: hand the screen to the Phosh debug desktop so Wi-Fi/brightness/terminal stay usable.
+    echo "$(date '+%F %T') hub-ui keeps crashing: switching to the debug desktop" >>"$LOG"
+    sudo -n systemd-run --collect --unit=razer-desktop-switch /usr/local/sbin/razer-desktop debug >>"$LOG" 2>&1 \
+      || sleep 60
+    fails=0
+  else
+    sleep 2
+  fi
+done

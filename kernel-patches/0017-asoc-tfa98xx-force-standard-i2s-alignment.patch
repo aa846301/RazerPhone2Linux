@@ -1,0 +1,66 @@
+diff --git a/sound/soc/codecs/tfa98xx-downstream/tfa98xx.c b/sound/soc/codecs/tfa98xx-downstream/tfa98xx.c
+--- a/sound/soc/codecs/tfa98xx-downstream/tfa98xx.c
++++ b/sound/soc/codecs/tfa98xx-downstream/tfa98xx.c
+@@ -1594,6 +1594,8 @@
+ 	}
+ 
+ 	tfa98xx->audio_mode = fmt & SND_SOC_DAIFMT_FORMAT_MASK;
++	tfa98xx->tfa->i2s_msb_aligned =
++		(tfa98xx->audio_mode == SND_SOC_DAIFMT_I2S);
+ 
+ 	return 0;
+ }
+diff --git a/sound/soc/codecs/tfa98xx-downstream/tfa_device.h b/sound/soc/codecs/tfa98xx-downstream/tfa_device.h
+--- a/sound/soc/codecs/tfa98xx-downstream/tfa_device.h
++++ b/sound/soc/codecs/tfa98xx-downstream/tfa_device.h
+@@ -157,6 +157,7 @@
+ 	int has_msg; /**< support direct dsp messaging */
+ 	int dynamicTDMmode; /**tracking dynamic TDM setting from alsa input stream*/
+ 	int bitwidth; /**bitwdith from alsa input stream*/
++	int i2s_msb_aligned; /**< host sends standard I2S: force TDMDEL=1, TDMADJ=0 */
+ 	unsigned char slave_address; /**< I2C slave address (not shifted) */
+ 	unsigned short rev; /**< full revid of this device */
+ 	enum featureSupport supportDrc;
+diff --git a/sound/soc/codecs/tfa98xx-downstream/tfa_dsp.c b/sound/soc/codecs/tfa98xx-downstream/tfa_dsp.c
+--- a/sound/soc/codecs/tfa98xx-downstream/tfa_dsp.c
++++ b/sound/soc/codecs/tfa98xx-downstream/tfa_dsp.c
+@@ -2838,6 +2838,21 @@
+ }
+ 
+ /*
++ * The container profile may program the TDM data alignment for a host that
++ * right-justifies 24-bit samples in a 32-bit slot (TDMADJ=1). A standard I2S
++ * host (e.g. the mainline q6afe MI2S port) sends MSB-first, left-justified data
++ * one BCK after the WS edge, so the amplifier would read the sample 8 bits too
++ * low and be almost silent. Re-apply standard I2S alignment after the profile.
++ */
++static void tfa_apply_i2s_alignment(struct tfa_device *tfa)
++{
++	if (!tfa->i2s_msb_aligned)
++		return;
++	TFA_SET_BF(tfa, TDMDEL, 1);
++	TFA_SET_BF(tfa, TDMADJ, 0);
++}
++
++/*
+  * start the clocks and wait until the AMP is switching
+  *	on return the DSP sub system will be ready for loading
+  */
+@@ -2892,6 +2907,7 @@
+ 	// NOTE we may still have ACS=1 so we can switch sample rate here
+ 	err = tfaContWriteRegsProf(tfa, profile);
+ 	PRINT_ASSERT(err);
++	tfa_apply_i2s_alignment(tfa);
+ 
+ 	/* Factory trimming for the Boost converter */
+ 	tfa98xx_factory_trimmer(tfa);
+@@ -3146,6 +3162,9 @@
+ 	if (err != Tfa98xx_Error_Ok)
+ 		goto error_exit;
+ 
++	/* profile switches and vstep files can rewrite the TDM registers */
++	tfa_apply_i2s_alignment(tfa);
++
+ 	tfa_dev_set_swprof(tfa, (unsigned short)next_profile);
+ 	tfa_dev_set_swvstep(tfa, (unsigned short)vstep);
+ 

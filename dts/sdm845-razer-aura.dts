@@ -103,12 +103,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&volume_down_gpio &volume_up_gpio>;
 
-		key-vol-down {
-			label = "Volume down";
-			linux,code = <KEY_VOLUMEDOWN>;
-			gpios = <&pm8998_gpios 5 GPIO_ACTIVE_LOW>;
-			debounce-interval = <15>;
-		};
+		/* Volume down is not a GPIO key on this phone: it is the PMIC RESIN line (see &pm8998_resin). */
 
 		key-vol-up {
 			label = "Volume up";
@@ -1312,6 +1307,15 @@
  * PMIC GPIO Configuration
  * ==========================================================================
  */
+/*
+ * Factory DT (boot.img, qcom,power-on@800 qcom,pon_2): pon-type 1 (RESIN) -> linux,code 0x72 KEY_VOLUMEDOWN.
+ * Verified 2026-11-10: the former gpio-keys entry on PMIC GPIO5 never produced an event.
+ */
+&pm8998_resin {
+	linux,code = <KEY_VOLUMEDOWN>;
+	status = "okay";
+};
+
 &pm8998_gpios {
 	front_camera_vdig_gpio: front-camera-vdig-state {
 		pins = "gpio4";

@@ -1,6 +1,5 @@
 [Unit]
 Description=Prefer external power and keep Razer Phone 2 battery between 40 and 80 percent
-After=multi-user.target
 
 [Service]
 Type=simple

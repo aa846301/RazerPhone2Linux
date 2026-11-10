@@ -1,0 +1,44 @@
+#!/bin/bash
+# Switch the screen between the hub kiosk and the Phosh debug desktop (both need DRM master; only one may run).
+#   razer-desktop hub      stop Phosh / old control panel, start the hub kiosk (user unit hub-sway)
+#   razer-desktop debug    stop the hub kiosk, start Phosh (Wi-Fi, brightness, battery, terminal, settings)
+#   razer-desktop status   print which one is running
+# Install: /usr/local/sbin/razer-desktop (root). The hub UI and the Phosh launcher call it as
+#   sudo -n systemd-run --collect --unit=razer-desktop-switch /usr/local/sbin/razer-desktop <mode>
+# so the switch survives the caller's own session being stopped.
+set -u
+U=${RAZER_HUB_USER:-klipper}
+user_ctl() { systemctl --user --machine="$U@" "$@"; }
+log() { echo "razer-desktop: $*"; logger -t razer-desktop "$*" 2>/dev/null || true; }
+
+case "${1:-status}" in
+  debug)
+    log "switching to Phosh debug desktop"
+    user_ctl stop hub-sway
+    systemctl stop razer-control-panel 2>/dev/null
+    sleep 1
+    systemctl start phosh
+    # Never leave the screen dead: if Phosh is not up after 20 s (it restart-loops on failure), go back.
+    for _ in $(seq 20); do
+      sleep 1
+      pgrep -u "$U" -x phosh >/dev/null && { log "Phosh is up"; exit 0; }
+    done
+    log "Phosh did not come up; switching back to the hub"
+    systemctl stop phosh
+    sleep 1
+    user_ctl start hub-sway
+    exit 1
+    ;;
+  hub)
+    log "switching to hub kiosk"
+    systemctl stop phosh 2>/dev/null
+    systemctl stop razer-control-panel 2>/dev/null
+    sleep 1
+    user_ctl start hub-sway
+    ;;
+  status)
+    printf "hub-sway=%s phosh=%s razer-control-panel=%s\n" "$(user_ctl is-active hub-sway)" \
+      "$(systemctl is-active phosh)" "$(systemctl is-active razer-control-panel)"
+    ;;
+  *) echo "usage: $0 hub|debug|status"; exit 2 ;;
+esac

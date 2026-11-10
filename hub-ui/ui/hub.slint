@@ -1,0 +1,601 @@
+// Razer Phone 2 wall hub: landscape 1280x720 logical (sway: transform 90, scale 2).
+// Left: device tiles from Home Assistant via the hub agent (tap = toggle, long-press = edit mode: drag to
+// reorder, "隱藏" to hide). Right: microphone button + voice status. Status bar gear: settings sheet.
+// When `dimmed` is true a full-screen catcher swallows the first touch and only wakes the screen.
+
+export struct Device {
+    id: string,
+    name: string,
+    room: string,
+    kind: string,   // light | switch | fan | cover | climate
+    on: bool,
+    available: bool,
+    glyph: string,  // one CJK character shown in the badge
+    sub: string,    // state line, e.g. "開啟", "冷氣 26°", "離線"
+}
+
+component StatusBar inherits Rectangle {
+    in property <string> time;
+    in property <string> date;
+    in property <string> wifi;
+    in property <string> battery;
+    in property <string> ha;
+    callback open-settings();
+    height: 64px;
+    HorizontalLayout {
+        padding-left: 28px;
+        padding-right: 12px;
+        spacing: 22px;
+        Text {
+            text: root.time;
+            font-size: 36px;
+            font-weight: 700;
+            color: #f2f2f7;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.date;
+            font-size: 19px;
+            color: #a1a1aa;
+            vertical-alignment: center;
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Text {
+            text: root.ha;
+            font-size: 17px;
+            color: #8e8e93;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.wifi;
+            font-size: 17px;
+            color: #8e8e93;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.battery;
+            font-size: 17px;
+            color: #8e8e93;
+            vertical-alignment: center;
+        }
+        // Settings gear: a 64x64 touch target (the glyph is 32 px).
+        gear := Rectangle {
+            width: 64px;
+            background: gear-ta.pressed ? #2c2c32 : transparent;
+            border-radius: 32px;
+            Path {
+                width: 32px;
+                height: 32px;
+                viewbox-width: 24;
+                viewbox-height: 24;
+                fill: #c7c7cc;
+                commands: "M19.14 12.94c.04-.31.06-.63.06-.94s-.02-.63-.06-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84a.48.48 0 0 0-.48.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.71 8.87a.48.48 0 0 0 .12.61l2.03 1.58c-.04.31-.06.63-.06.94s.02.63.06.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.48.48 0 0 0-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z";
+            }
+            gear-ta := TouchArea { clicked => { root.open-settings(); } }
+        }
+    }
+}
+
+component Tile inherits Rectangle {
+    in property <Device> device;
+    in property <bool> editing;
+    // Current drag offset applied to this tile by the parent. TouchArea coordinates are relative to the tile,
+    // which moves with the finger, so the finger's real displacement is (mouse - pressed) + offset.
+    in property <length> offset-x;
+    in property <length> offset-y;
+    callback tapped();
+    callback long-pressed();
+    callback hide();
+    callback rename();
+    callback drag-delta(length, length);
+    callback drag-released(length, length);
+
+    property <bool> holding: false;
+    property <bool> long-fired: false;
+    property <bool> lit: root.device.on && root.device.available;
+
+    border-radius: 24px;
+    background: root.lit ? #f5c451 : #26262c;
+    opacity: root.device.available ? 1.0 : 0.55;
+    animate background { duration: 180ms; }
+
+    VerticalLayout {
+        padding: 18px;
+        spacing: 4px;
+        HorizontalLayout {
+            Rectangle {
+                width: 52px;
+                height: 52px;
+                border-radius: 26px;
+                background: root.lit ? #ffffff : #3a3a42;
+                Text {
+                    text: root.device.glyph;
+                    font-size: 24px;
+                    font-weight: 700;
+                    color: root.lit ? #b7791f : #d1d1d6;
+                }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Rectangle { vertical-stretch: 1; }
+        Text {
+            text: root.device.name;
+            font-size: 22px;
+            font-weight: 700;
+            color: root.lit ? #1c1c1e : #f2f2f7;
+            overflow: elide;
+        }
+        Text {
+            text: (root.device.room != "" ? root.device.room + "・" : "") + root.device.sub;
+            font-size: 16px;
+            color: root.lit ? #4a4a4f : #8e8e93;
+            overflow: elide;
+        }
+    }
+
+    if root.editing: Rectangle {
+        border-radius: root.border-radius;
+        border-width: 3px;
+        border-color: #0a84ff;
+        background: transparent;
+    }
+
+    ta := TouchArea {
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.down) {
+                root.holding = true;
+                root.long-fired = false;
+            } else if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) {
+                root.holding = false;
+                if (root.editing) {
+                    root.drag-released(self.mouse-x - self.pressed-x + root.offset-x,
+                                       self.mouse-y - self.pressed-y + root.offset-y);
+                }
+            }
+        }
+        moved => {
+            if (root.editing) {
+                root.drag-delta(self.mouse-x - self.pressed-x + root.offset-x,
+                                self.mouse-y - self.pressed-y + root.offset-y);
+            } else if (abs(self.mouse-x - self.pressed-x) > 12px || abs(self.mouse-y - self.pressed-y) > 12px) {
+                root.holding = false;
+            }
+        }
+        clicked => {
+            if (!root.editing && !root.long-fired && root.device.available) {
+                root.tapped();
+            }
+        }
+    }
+
+    // Edit mode: "改名" (voice dictation) and "隱藏" pills in the top-right corner (above the drag area).
+    if root.editing: Rectangle {
+        x: parent.width - 10px - 66px - 8px - 66px;
+        y: 10px;
+        width: 66px;
+        height: 44px;
+        border-radius: 22px;
+        background: rename-ta.pressed ? #3a3a8e : #5e5ce6;
+        Text { text: "改名"; font-size: 18px; font-weight: 700; color: white; }
+        rename-ta := TouchArea { clicked => { root.rename(); } }
+    }
+    if root.editing: Rectangle {
+        x: parent.width - self.width - 10px;
+        y: 10px;
+        width: 66px;
+        height: 44px;
+        border-radius: 22px;
+        background: hide-ta.pressed ? #8e2b26 : #ff453a;
+        Text { text: "隱藏"; font-size: 18px; font-weight: 700; color: white; }
+        hide-ta := TouchArea { clicked => { root.hide(); } }
+    }
+
+    Timer {
+        interval: 650ms;
+        running: root.holding && !root.editing;
+        triggered => {
+            root.holding = false;
+            root.long-fired = true;
+            root.long-pressed();
+        }
+    }
+}
+
+// Pulsing discs shown only while listening/thinking; animation-tick() keeps redrawing only while this exists.
+component VoiceRings inherits Rectangle {
+    in property <bool> thinking;
+    property <float> t: animation-tick() / 1s;
+    for k in [0, 1, 2]: Rectangle {
+        property <float> phase: Math.mod(root.t * (root.thinking ? 1.6 : 0.9) + k / 3, 1.0);
+        width: 120px + 90px * self.phase;
+        height: self.width;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        border-radius: self.width / 2;
+        background: root.thinking ? #bf5af2 : #5e5ce6;
+        opacity: 0.35 * (1 - self.phase);
+    }
+}
+
+// Horizontal slider without std-widgets: drag or tap anywhere on the track. value is 0..1.
+component Slider inherits Rectangle {
+    in-out property <float> value;
+    callback changed(float);
+    height: 56px;
+    Rectangle {
+        y: (parent.height - 10px) / 2;
+        height: 10px;
+        border-radius: 5px;
+        background: #3a3a42;
+        Rectangle {
+            x: 0px;
+            width: parent.width * root.value;
+            border-radius: 5px;
+            background: #0a84ff;
+        }
+    }
+    Rectangle {
+        x: (root.width - 36px) * root.value;
+        y: (root.height - 36px) / 2;
+        width: 36px;
+        height: 36px;
+        border-radius: 18px;
+        background: white;
+    }
+    TouchArea {
+        function set(px: length) {
+            root.value = clamp((px - 18px) / (root.width - 36px), 0, 1);
+            root.changed(root.value);
+        }
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.down) { self.set(self.mouse-x); }
+        }
+        moved => { self.set(self.mouse-x); }
+    }
+}
+
+component SheetButton inherits Rectangle {
+    in property <string> text;
+    in property <color> base: #2c2c32;
+    in property <color> fg: #f2f2f7;
+    callback clicked();
+    height: 64px;
+    border-radius: 32px;
+    background: bta.pressed ? #48484f : root.base;
+    Text { text: root.text; font-size: 21px; font-weight: 600; color: root.fg; }
+    bta := TouchArea { clicked => { root.clicked(); } }
+}
+
+export component HubWindow inherits Window {
+    title: "Razer Hub";
+    preferred-width: 1280px;
+    preferred-height: 720px;
+    no-frame: true;
+    background: #101013;
+    default-font-family: "Noto Sans CJK TC";
+
+    in property <[Device]> devices;
+    in property <string> time;
+    in property <string> date;
+    in property <string> wifi;
+    in property <string> battery;
+    in property <string> ha: "HA 未連線";
+    in property <bool> dimmed;
+    in-out property <bool> editing;
+    in property <string> voice-state: "idle";   // idle | listening | thinking | done
+    in property <string> voice-text: "";
+    in property <float> volume: 0.4;              // 0..1 (PipeWire default sink)
+    in property <bool> muted;
+    in property <bool> volume-shown;              // set by Rust on a volume key, cleared after a timeout
+    in-out property <bool> settings-open: false;
+    in-out property <float> brightness: 0.45;     // 0..1 of the active backlight level
+    in property <int> hidden-count;
+    in property <string> timezone;
+
+    callback toggle-device(int);
+    callback hide-device(int);
+    callback rename-device(int);                 // next utterance becomes the tile's name
+    callback reset-names();
+    in property <int> renamed-count;
+    callback drop-device(int, float, float);     // index, moved columns, moved rows (unrounded)
+    callback mic-pressed();
+    callback wake();
+    callback activity();
+    callback switch-desktop();                   // to the Phosh debug desktop
+    callback set-volume(float);
+    callback set-brightness(float);
+    callback unhide-all();
+
+    property <int> cols: 4;
+    property <length> gap: 18px;
+    property <length> margin: 28px;
+    property <length> panel-w: 250px;
+    property <length> grid-top: 76px;
+    property <length> grid-w: root.width - 2 * root.margin - root.panel-w - root.gap;
+    property <length> cell-w: (root.grid-w - (root.cols - 1) * root.gap) / root.cols;
+    property <length> cell-h: 148px;
+    property <int> drag-index: -1;
+    property <length> drag-dx: 0px;
+    property <length> drag-dy: 0px;
+
+    StatusBar {
+        x: 0px;
+        y: 4px;
+        width: root.width;
+        time: root.time;
+        date: root.date;
+        wifi: root.wifi;
+        battery: root.battery;
+        ha: root.ha;
+        open-settings => {
+            root.activity();
+            root.editing = false;
+            root.settings-open = true;
+        }
+    }
+
+    if root.devices.length == 0: Text {
+        x: root.margin;
+        y: root.grid-top + 40px;
+        width: root.grid-w;
+        text: root.ha == "HA 已連線" ? "沒有可顯示的裝置（齒輪 → 顯示隱藏的裝置）" : "正在連線 Home Assistant…";
+        font-size: 22px;
+        color: #8e8e93;
+    }
+
+    for d[i] in root.devices: Tile {
+        device: d;
+        editing: root.editing;
+        offset-x: i == root.drag-index ? root.drag-dx : 0px;
+        offset-y: i == root.drag-index ? root.drag-dy : 0px;
+        width: root.cell-w;
+        height: root.cell-h;
+        x: root.margin + Math.mod(i, root.cols) * (root.cell-w + root.gap) + (i == root.drag-index ? root.drag-dx : 0px);
+        y: root.grid-top + floor(i / root.cols) * (root.cell-h + root.gap) + (i == root.drag-index ? root.drag-dy : 0px);
+        z: i == root.drag-index ? 10 : 0;
+        tapped => {
+            root.activity();
+            root.toggle-device(i);
+        }
+        long-pressed => {
+            root.activity();
+            root.editing = true;
+        }
+        hide => {
+            root.activity();
+            root.hide-device(i);
+        }
+        rename => {
+            root.activity();
+            root.rename-device(i);
+        }
+        drag-delta(dx, dy) => {
+            root.activity();
+            root.drag-index = i;
+            root.drag-dx = dx;
+            root.drag-dy = dy;
+        }
+        drag-released(dx, dy) => {
+            root.drag-index = -1;
+            root.drag-dx = 0px;
+            root.drag-dy = 0px;
+            root.drop-device(i, dx / (root.cell-w + root.gap), dy / (root.cell-h + root.gap));
+        }
+    }
+
+    // Right panel: microphone
+    Rectangle {
+        x: root.width - root.margin - root.panel-w;
+        y: root.grid-top;
+        width: root.panel-w;
+        height: root.height - root.grid-top - root.margin;
+        border-radius: 28px;
+        background: #18181d;
+
+        mic-area := Rectangle {
+            x: (parent.width - 220px) / 2;
+            y: 70px;
+            width: 220px;
+            height: 220px;
+            if root.voice-state == "listening" || root.voice-state == "thinking": VoiceRings {
+                width: parent.width;
+                height: parent.height;
+                thinking: root.voice-state == "thinking";
+            }
+            Rectangle {
+                x: 50px;
+                y: 50px;
+                width: 120px;
+                height: 120px;
+                border-radius: 60px;
+                background: @linear-gradient(135deg, #5e5ce6 0%, #bf5af2 55%, #ff375f 100%);
+                Path {
+                    x: 34px;
+                    y: 30px;
+                    width: 52px;
+                    height: 60px;
+                    viewbox-width: 24;
+                    viewbox-height: 24;
+                    fill: white;
+                    commands: "M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V21h2v-3.07A7 7 0 0 0 19 11h-2z";
+                }
+                TouchArea {
+                    clicked => {
+                        root.activity();
+                        root.mic-pressed();
+                    }
+                }
+            }
+        }
+
+        Text {
+            x: 16px;
+            y: mic-area.y + mic-area.height + 24px;
+            width: parent.width - 32px;
+            text: root.voice-text != "" ? root.voice-text : "說「嘿賈伯斯」\n或點一下開始說話";
+            font-size: 20px;
+            color: #d1d1d6;
+            horizontal-alignment: center;
+            wrap: word-wrap;
+        }
+
+        // Edit mode: a large Done button at the bottom of the panel (easy to reach, away from the screen edge).
+        if root.editing: Rectangle {
+            x: 20px;
+            y: parent.height - 20px - 76px;
+            width: parent.width - 40px;
+            height: 76px;
+            border-radius: 38px;
+            background: done-ta.pressed ? #0060c8 : #0a84ff;
+            Text {
+                text: "完成";
+                font-size: 28px;
+                font-weight: 700;
+                color: white;
+            }
+            done-ta := TouchArea {
+                clicked => {
+                    root.activity();
+                    root.editing = false;
+                }
+            }
+        }
+        if root.editing: Text {
+            x: 16px;
+            y: parent.height - 20px - 76px - 44px;
+            width: parent.width - 32px;
+            text: "拖曳排列・改名用說的";
+            font-size: 17px;
+            color: #8e8e93;
+            horizontal-alignment: center;
+        }
+    }
+
+    // Volume overlay (volume keys): slides down from under the status bar, fades out.
+    Rectangle {
+        property <length> w: 420px;
+        x: (root.width - self.w) / 2;
+        y: root.volume-shown ? 84px : 40px;
+        width: self.w;
+        height: 72px;
+        z: 50;
+        opacity: root.volume-shown ? 1 : 0;
+        visible: self.opacity > 0;
+        animate y { duration: 220ms; easing: ease-out; }
+        animate opacity { duration: 220ms; }
+        border-radius: 36px;
+        background: #2c2c32;
+        Path {
+            x: 24px;
+            y: 18px;
+            width: 36px;
+            height: 36px;
+            viewbox-width: 24;
+            viewbox-height: 24;
+            fill: root.muted ? #8e8e93 : #f2f2f7;
+            commands: root.muted || root.volume <= 0
+                ? "M3 9v6h4l5 5V4L7 9H3zm13.6 3 2.7-2.7-1.4-1.4-2.7 2.7-2.7-2.7-1.4 1.4 2.7 2.7-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4z"
+                : "M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8v8a4.5 4.5 0 0 0 2.5-4zM14 3.2v2.1a7 7 0 0 1 0 13.4v2.1a9 9 0 0 0 0-17.6z";
+        }
+        Rectangle {
+            x: 76px;
+            y: (parent.height - 12px) / 2;
+            width: parent.width - 76px - 84px;
+            height: 12px;
+            border-radius: 6px;
+            background: #48484f;
+            Rectangle {
+                x: 0px;
+                width: parent.width * clamp(root.muted ? 0 : root.volume, 0, 1);
+                height: parent.height;
+                border-radius: 6px;
+                background: #f2f2f7;
+                animate width { duration: 120ms; }
+            }
+        }
+        Text {
+            x: parent.width - 72px;
+            width: 56px;
+            height: parent.height;
+            text: root.muted ? "靜音" : round(root.volume * 100) + "%";
+            font-size: 20px;
+            font-weight: 600;
+            color: #f2f2f7;
+            horizontal-alignment: right;
+            vertical-alignment: center;
+        }
+    }
+
+    // Settings sheet (gear icon).
+    if root.settings-open: Rectangle {
+        z: 90;
+        width: root.width;
+        height: root.height;
+        background: #000000b0;
+        TouchArea { clicked => { root.activity(); root.settings-open = false; } }
+        Rectangle {
+            x: root.width - 28px - 560px;
+            y: 76px;
+            width: 560px;
+            height: root.height - 76px - 28px;
+            border-radius: 28px;
+            background: #1c1c21;
+            TouchArea { clicked => { root.activity(); } }   // keep taps on the sheet from closing it
+            VerticalLayout {
+                padding: 28px;
+                spacing: 10px;
+                HorizontalLayout {
+                    Text { text: "設定"; font-size: 30px; font-weight: 700; color: #f2f2f7; }
+                    Rectangle { horizontal-stretch: 1; }
+                    Rectangle {
+                        width: 56px;
+                        height: 56px;
+                        border-radius: 28px;
+                        background: close-ta.pressed ? #3a3a42 : #2c2c32;
+                        Text { text: "✕"; font-size: 24px; color: #f2f2f7; }
+                        close-ta := TouchArea { clicked => { root.activity(); root.settings-open = false; } }
+                    }
+                }
+                Text { text: "亮度"; font-size: 18px; color: #8e8e93; }
+                Slider {
+                    value: root.brightness;
+                    changed(v) => { root.activity(); root.brightness = v; root.set-brightness(v); }
+                }
+                Text { text: "音量  " + round(root.volume * 100) + "%"; font-size: 18px; color: #8e8e93; }
+                Slider {
+                    value: root.volume;
+                    changed(v) => { root.activity(); root.set-volume(v); }
+                }
+                Rectangle { height: 6px; }
+                Text { text: root.wifi + "    " + root.battery; font-size: 18px; color: #d1d1d6; }
+                Text { text: "時間：網路自動校時（" + root.timezone + "）"; font-size: 18px; color: #d1d1d6; }
+                Text { text: root.ha; font-size: 18px; color: #d1d1d6; }
+                Rectangle { vertical-stretch: 1; }
+                if root.hidden-count > 0: SheetButton {
+                    text: "顯示 " + root.hidden-count + " 個已隱藏的裝置";
+                    clicked => { root.activity(); root.unhide-all(); }
+                }
+                if root.renamed-count > 0: SheetButton {
+                    text: "還原 " + root.renamed-count + " 個自訂名稱";
+                    clicked => { root.activity(); root.reset-names(); }
+                }
+                SheetButton {
+                    text: "切換到除錯桌面";
+                    base: #3a1f1d;
+                    fg: #ff6961;
+                    clicked => { root.settings-open = false; root.switch-desktop(); }
+                }
+            }
+        }
+    }
+
+    // First touch on a dimmed screen only wakes it.
+    if root.dimmed: TouchArea {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        z: 100;
+        clicked => { root.wake(); }
+    }
+}

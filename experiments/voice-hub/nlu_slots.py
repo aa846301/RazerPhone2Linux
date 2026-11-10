@@ -55,6 +55,15 @@ FEWSHOT = [
 ]
 
 
+# Off-list `action` values the model may emit -> fixed action (checked in order; first match wins).
+INDIRECT = [
+    (("熱", "降溫", "涼"), "調低溫度"),
+    (("冷", "升溫", "暖"), "調高溫度"),
+    (("暗",), "調亮"),
+    (("亮", "刺眼"), "調暗"),
+    (("打開", "開啟", "開一下"), "開"),
+    (("關掉", "關閉", "關上"), "關"),
+]
 SHORT = {"intent": "i", "items": "x", "device": "d", "room": "r", "action": "a", "scope": "s",
          "exclude": "e", "amount": "n"}
 LONG = {v: k for k, v in SHORT.items()}
@@ -141,8 +150,54 @@ class SlotParser:
         except json.JSONDecodeError:
             return {"intent": "拒絕", "items": []}, resp.get("timings", {})
 
+    def _valid(self, slots):
+        """Schema check in code: engines without grammar-constrained decoding (MNN) can emit values outside
+        the fixed options (e.g. action "調濕"). Anything off-schema must never execute."""
+        if not isinstance(slots, dict) or slots.get("intent") not in ("控制", "反問", "拒絕"):
+            return False
+        items = slots.get("items", [])
+        if not isinstance(items, list):
+            return False
+        for it in items:
+            if not isinstance(it, dict):
+                return False
+            if it.get("device") not in self.devices or it.get("action") not in ACTIONS:
+                return False
+            if it.get("room", "未指定") not in self.rooms or it.get("scope", "單一") not in ("單一", "全部"):
+                return False
+            if "exclude" in it and not isinstance(it["exclude"], bool):
+                return False
+            if it.get("amount") is not None and not isinstance(it["amount"], (int, float)):
+                return False
+        return True
+
+    @staticmethod
+    def _normalize_actions(slots):
+        """Without grammar-constrained decoding the model sometimes copies the user's words into `action`
+        (seen on the phone 2026-11-11: Qwen3-1.7B on MNN answered 好熱喔 with action "好熱", intent 反問).
+        Map such indirect phrasings and plain verb variants onto the fixed action set; an indirect cue that
+        names a concrete adjustment also means the user wants control, not a follow-up question."""
+        if not isinstance(slots, dict) or not isinstance(slots.get("items"), list):
+            return slots
+        cued = False
+        for it in slots["items"]:
+            if not isinstance(it, dict) or it.get("action") in ACTIONS:
+                continue
+            a = str(it.get("action", ""))
+            for words, target in INDIRECT:
+                if any(w in a for w in words):
+                    it["action"] = target
+                    cued = True
+                    break
+        if cued and slots.get("intent") == "反問":
+            slots["intent"] = "控制"
+        return slots
+
     def resolve(self, slots, text):
         """slots JSON -> proposal (same format as the other backends)."""
+        slots = self._normalize_actions(slots)
+        if not self._valid(slots):
+            return {"actions": [], "clarify": "我不確定要怎麼做，可以再說一次嗎？", "invalid": True}
         if slots.get("intent") == "反問":
             return {"actions": [], "clarify": "請問要控制哪個設備、調成多少？"}
         if slots.get("intent") != "控制" or not slots.get("items"):
@@ -196,8 +251,12 @@ class SlotParser:
                 return {"actions": [], "reject": "這個區域沒有這類設備"}
             for i in ids:
                 if kind == "adjust_light" and "brightness" not in self.by_id[i].get("features", []):
-                    continue
+                    if act.endswith("+"):   # 好暗 / 調亮 on an on-off-only light: switch it on
+                        actions.append({"entity_id": i, "op": "turn_on"})
+                    continue                # 調暗 on an on-off light stays a question, never an off
                 op, v = self.rp.ops_for(kind, val, i)
+                if op and kind == "adjust_temp" and self.home.get("state", {}).get(i, {}).get("state") == "off":
+                    actions.append({"entity_id": i, "op": "turn_on"})   # 好熱 with the AC off: switch it on too
                 if op:
                     a = {"entity_id": i, "op": op}
                     if v is not None:

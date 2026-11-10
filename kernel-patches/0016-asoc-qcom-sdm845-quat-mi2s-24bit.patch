@@ -1,0 +1,75 @@
+diff --git a/sound/soc/qcom/sdm845.c b/sound/soc/qcom/sdm845.c
+--- a/sound/soc/qcom/sdm845.c
++++ b/sound/soc/qcom/sdm845.c
+@@ -23,6 +23,16 @@
+ #define DEFAULT_MCLK_RATE		24576000
+ #define TDM_BCLK_RATE		6144000
+ #define MI2S_BCLK_RATE		1536000
++/*
++ * Razer Phone 2: the two TFA9912 speaker amplifiers on QUAT MI2S are configured by the factory container for
++ * 64 BCK per frame (32-bit slots, 24-bit samples), matching stock Android's S24_LE speaker backend. Driving the
++ * port as S16_LE at 1.536 MHz leaves the amps flagging CLKOOR with the PLL unlocked: no sound, no error.
++ * The DSP (NULL COPP topology) does not rescale between the ASM and ADM bit widths, so a 16-bit stream into
++ * the 24-bit backend lands in the low bits, ~48 dB too quiet: playback front ends are therefore 24-bit only
++ * (the ALSA plug layer converts).
++ */
++#define QUAT_MI2S_RX_FORMAT	SNDRV_PCM_FORMAT_S24_LE
++#define QUAT_MI2S_BCLK_RATE	(DEFAULT_SAMPLE_RATE_48K * 32 * 2)
+ #define LEFT_SPK_TDM_TX_MASK    0x30
+ #define RIGHT_SPK_TDM_TX_MASK   0xC0
+ #define SPK_TDM_RX_MASK         0x03
+@@ -368,7 +378,7 @@
+ 		codec_dai_fmt |= SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_I2S;
+ 		ret = snd_soc_dai_set_sysclk(cpu_dai,
+ 			Q6AFE_LPASS_CLK_ID_QUAD_MI2S_IBIT,
+-			MI2S_BCLK_RATE, SNDRV_PCM_STREAM_PLAYBACK);
++			QUAT_MI2S_BCLK_RATE, SNDRV_PCM_STREAM_PLAYBACK);
+ 		if (ret < 0) {
+ 			dev_err(rtd->dev, "QUAT MI2S bit clock error: %d\n",
+ 				ret);
+@@ -543,10 +553,14 @@
+ 	struct snd_interval *channels = hw_param_interval(params,
+ 					SNDRV_PCM_HW_PARAM_CHANNELS);
+ 	struct snd_mask *fmt = hw_param_mask(params, SNDRV_PCM_HW_PARAM_FORMAT);
++	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+ 
+ 	rate->min = rate->max = DEFAULT_SAMPLE_RATE_48K;
+ 	channels->min = channels->max = 2;
+-	snd_mask_set_format(fmt, SNDRV_PCM_FORMAT_S16_LE);
++	if (cpu_dai->id == QUATERNARY_MI2S_RX)
++		snd_mask_set_format(fmt, QUAT_MI2S_RX_FORMAT);
++	else
++		snd_mask_set_format(fmt, SNDRV_PCM_FORMAT_S16_LE);
+ 
+ 	return 0;
+ }
+@@ -564,6 +578,20 @@
+ 	SOC_DAPM_PIN_SWITCH("Headset Mic"),
+ };
+ 
++static int sdm845_fe_startup(struct snd_pcm_substream *substream)
++{
++	if (substream->stream != SNDRV_PCM_STREAM_PLAYBACK)
++		return 0;
++
++	return snd_pcm_hw_constraint_mask64(substream->runtime,
++					    SNDRV_PCM_HW_PARAM_FORMAT,
++					    pcm_format_to_bits(QUAT_MI2S_RX_FORMAT));
++}
++
++static const struct snd_soc_ops sdm845_fe_ops = {
++	.startup = sdm845_fe_startup,
++};
++
+ static void sdm845_add_ops(struct snd_soc_card *card)
+ {
+ 	struct snd_soc_dai_link *link;
+@@ -573,6 +601,8 @@
+ 		if (link->no_pcm == 1) {
+ 			link->ops = &sdm845_be_ops;
+ 			link->be_hw_params_fixup = sdm845_be_hw_params_fixup;
++		} else {
++			link->ops = &sdm845_fe_ops;
+ 		}
+ 		link->init = sdm845_dai_init;
+ 	}

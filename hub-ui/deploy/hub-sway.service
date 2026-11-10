@@ -1,0 +1,21 @@
+# User unit (klipper, linger enabled): sway kiosk session running the hub UI.
+# Install: ~/.config/systemd/user/hub-sway.service ; enable for boot: systemctl --user enable hub-sway
+# It conflicts with razer-control-panel (both need DRM master); stop that service first.
+[Unit]
+Description=Razer hub kiosk (sway + Slint hub UI)
+
+[Service]
+Environment=LIBSEAT_BACKEND=seatd
+Environment=WLR_NO_HARDWARE_CURSORS=1
+# Partial (damage-tracked) repaints leave a 1-px stale column at the edge of the damaged area with transform 90 +
+# scale 2 (a vertical line beside the animating mic button, 2026-11-10; not visible in grim screenshots).
+# Re-render the whole output on every frame; frames are only produced while something animates.
+Environment=WLR_SCENE_DEBUG_DAMAGE=rerender
+# The Phosh debug desktop imports LANGUAGE=zh_TW into the user manager; keep the kiosk untranslated.
+UnsetEnvironment=LANGUAGE SLINT_DEBUG_PERFORMANCE
+ExecStart=/usr/bin/dbus-run-session -- /usr/bin/sway -c %h/.config/razer-hub/sway.conf
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

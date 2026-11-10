@@ -31,3 +31,5 @@ output_direct.txt
 
 # Home Assistant token for the voice hub (template: experiments/voice-hub/ha.env.example).
 experiments/voice-hub/ha.env
+experiments/voice-hub/ha.env.*
+!experiments/voice-hub/ha.env.example

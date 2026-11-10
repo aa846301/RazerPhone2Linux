@@ -1,0 +1,13 @@
+[Unit]
+Description=Configure Razer Phone 2 TFA9912 speaker amps for the 16-bit I2S clock mainline sends
+After=sound.target
+ConditionPathExists=/sys/bus/i2c/drivers/tfa98xx
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The tfa98xx driver loads its container asynchronously after probe; retry until both amps answer.
+ExecStart=/bin/sh -c 'for i in 1 2 3 4 5 6 7 8 9 10; do /usr/local/sbin/razer-speaker-setup && exit 0; sleep 3; done; exit 1'
+
+[Install]
+WantedBy=multi-user.target

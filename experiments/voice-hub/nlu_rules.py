@@ -16,9 +16,16 @@ Design rules (see README):
 """
 import re
 
+import os
+
 try:
     from pypinyin import lazy_pinyin
-except ImportError:  # pragma: no cover - homophone repair is optional
+except ImportError:  # pragma: no cover
+    # Without pypinyin, ASR homophones are not repaired (e.g. 客聽 is not recognised as 客廳, so "客聽的燈全部
+    # 關掉" turned off every light in the house on the phone). Never degrade silently.
+    if os.environ.get("NLU_ALLOW_NO_PINYIN") != "1":
+        raise ImportError("nlu_rules requires pypinyin for ASR homophone repair "
+                          "(apt install python3-pypinyin); set NLU_ALLOW_NO_PINYIN=1 only for tests")
     lazy_pinyin = None
 
 try:

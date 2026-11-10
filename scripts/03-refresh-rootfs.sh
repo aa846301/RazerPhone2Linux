@@ -189,6 +189,16 @@ install -D -m 0644 \
     "$MOUNT_DIR/etc/systemd/system/razer-net-watchdog.service"
 ln -sf ../razer-net-watchdog.service \
     "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/razer-net-watchdog.service"
+# Speakers: retune the TFA9912 TDM interface to the 16-bit I2S clock mainline
+# sends (needs i2c-tools in the rootfs). See rootfs-scripts/razer-speaker-setup.sh.
+install -D -m 0755 \
+    "$PROJECT_DIR/rootfs-scripts/razer-speaker-setup.sh" \
+    "$MOUNT_DIR/usr/local/sbin/razer-speaker-setup"
+install -D -m 0644 \
+    "$PROJECT_DIR/rootfs-scripts/razer-speaker-setup.service" \
+    "$MOUNT_DIR/etc/systemd/system/razer-speaker-setup.service"
+ln -sf ../razer-speaker-setup.service \
+    "$MOUNT_DIR/etc/systemd/system/multi-user.target.wants/razer-speaker-setup.service"
 # Flush the journal often so a boot that later stalls still leaves logs.
 install -D -m 0644 /dev/stdin "$MOUNT_DIR/etc/systemd/journald.conf.d/90-razer-sync.conf" <<'EOF'
 [Journal]

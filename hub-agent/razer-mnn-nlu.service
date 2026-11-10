@@ -1,0 +1,19 @@
+# User unit (klipper): MNN LLM server for the hub agent's constrained-slot NLU (rules fall back to it when
+# unsure). OpenAI-style /v1/chat/completions on 127.0.0.1:8091; Qwen3-1.7B on the Adreno 630 (rusticl, fp16),
+# the combination measured at 94.2% with 0 wrong executions (report §17).
+# Install: ~/.config/systemd/user/razer-mnn-nlu.service ; systemctl --user enable --now razer-mnn-nlu
+[Unit]
+Description=Razer hub LLM (MNN Qwen3-1.7B slot parser)
+Before=razer-hub-agent.service
+
+[Service]
+Environment=RUSTICL_ENABLE=freedreno
+Environment=OCL_ICD_VENDORS=/opt/mesa-26.2.6/etc/OpenCL/vendors
+Environment=LD_LIBRARY_PATH=/opt/mesa-26.2.6/lib/aarch64-linux-gnu
+WorkingDirectory=%h/voice/mnn_nlu
+ExecStart=/usr/bin/taskset -c 4-7 /usr/bin/python3 %h/voice/mnn_nlu/mnn_openai_server.py ./mnn_nlu_worker %h/voice/models/mnn/Qwen3-1.7B-MNN/config.json {"backend_type":"opencl","precision":"low","thread_num":4} 8091
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

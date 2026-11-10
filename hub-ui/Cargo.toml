@@ -1,0 +1,21 @@
+[package]
+name = "hub-ui"
+version = "0.1.0"
+edition = "2021"
+description = "Wall-mounted Home Assistant touch hub UI for the Razer Phone 2 (Slint, landscape, sway kiosk)"
+license = "GPL-3.0-only"
+
+[dependencies]
+slint = { version = "1", default-features = false, features = ["std", "compat-1-2", "backend-winit-wayland", "renderer-femtovg"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+signal-hook = "0.3"
+
+[build-dependencies]
+slint-build = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4

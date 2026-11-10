@@ -1,0 +1,2 @@
+# Let the "video" group set panel brightness and backlight power so the hub UI can dim/wake without root.
+ACTION=="add", SUBSYSTEM=="backlight", RUN+="/bin/chgrp video /sys%p/brightness /sys%p/bl_power", RUN+="/bin/chmod g+w /sys%p/brightness /sys%p/bl_power"

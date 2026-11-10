@@ -1,0 +1,17 @@
+# User unit (klipper, linger enabled): Home Assistant + voice agent for the hub UI.
+# Install: ~/.config/systemd/user/razer-hub-agent.service ; systemctl --user enable --now razer-hub-agent
+# Options (e.g. HUB_DRY_RUN=1 to only show what voice commands would do) go in ~/.config/razer-hub/agent.env.
+[Unit]
+Description=Razer hub agent (Home Assistant, wake word, speech recognition)
+After=pipewire.service
+
+[Service]
+EnvironmentFile=-%h/.config/razer-hub/agent.env
+ExecStart=%h/voice/venv/bin/python %h/hub-agent/hub_agent.py
+Restart=always
+RestartSec=5
+# Keep the UI responsive: the agent's ASR bursts run at lower priority.
+Nice=5
+
+[Install]
+WantedBy=default.target

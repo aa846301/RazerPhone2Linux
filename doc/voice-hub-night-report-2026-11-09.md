@@ -591,7 +591,9 @@
     | Qwen3.5-0.8B Q4_0 | 41 / **2.0** | 118 / **25.6** |
     | Qwen3-1.7B Q4_0 | 20 / **1.8** | 58 / **12.0** |
 
-    1.7B 的模型結構較單純，也一樣慢，表示問題不在運算退回 CPU，而是 llama.cpp 的 4-bit 矩陣乘法在 rusticl 上很慢。
+    1.7B 的模型結構較單純，也一樣慢，表示問題不在運算退回 CPU。
+    > **更正（2026-11-10）**：之後檢查 dmesg，發現這兩次 llama-bench 執行時 GPU 都發生 `hangcheck detected gpu lockup` 並被重置，肇事的都是 llama-bench 的 rusticl queue。
+    > 所以上面的 2.0 / 1.8 tok/s 被 GPU 卡死與重置拖累，**不是 llama.cpp 的真實速度**。正確的結論是：llama.cpp OpenCL 在 rusticl 上**會讓 GPU 卡死，無法穩定使用**。改用 MNN 的結論不變。
 - **結論：換框架沒有好處。** 任何框架都受同樣的 24.1 GB/s 頻寬和 ALU 限制，目前 MNN 加自寫 kernel 是最快的。
 
 ### 15.4 能不能從驅動／硬體層面加速 4-bit 解碼（`alu_tp.cl`、`cl_tmu.c`）
@@ -629,8 +631,250 @@
 | 合併共用同一輸入的小矩陣（gate/up、q/k/v） | 2–3 ms | 改 MNN 計算圖 |
 | 讓記憶體讀取與運算真正重疊 | GEMV 上限約可再省 20% | 研究性質，不確定 |
 
+## 十六、MLC-LLM 實測（2026-11-10，**未跑出結果，已停止**）
+
+- **為什麼試**：TVM 會合併運算，理論上能減少每個 token 約 1,085 個 kernel 的固定開銷。估計最好也只能快 10–15%（約 28–30 tok/s），換算語音指令只快約 0.09 秒，所以停止。
+- **遇到的問題**（依序）：
+  1. pip 上的 MLC nightly（`mlc-ai-nightly 0.26.dev246`）比 mlc-llm 主線配套的 TVM（0.28.dev0）**落後兩版**。
+     - 轉換 Qwen3.5 時 TVMScript 解析器當掉：只要 prim_func 裡有「帶型別的區域變數」就會當，最小重現見 `tvmscript_min.py`。
+     - numpy 2.5 不相容；`tirx.is_buffer_var` 不存在。
+     - 這些都是套件本身的問題，與手機無關。
+  2. 改從原始碼編譯 TVM 0.28 + mlc-llm `44fd06d`，電腦和手機都用同一套。
+     - 電腦端 LLVM 用 conda-forge `llvmdev`：llvm-project 官方 tarball 的靜態庫是 ThinLTO bitcode，GNU ld 無法連結。
+     - 之後轉換和編譯都成功：`q4f16_1` / `q4f32_1`，`lib-opencl.tar` 約 1.5–1.7 MB，權重 0.58 GB。
+  3. 手機執行時 rusticl（clang）拒絕編譯 TVM 產生的 OpenCL：
+     - `__local` 宣告在巢狀區塊內。高通閉源編譯器接受，但不符合 OpenCL C 規範。已寫後處理 `opencl_local_hoist.py` 繞過；同名的 `__local` 區塊會被合併，**正確性未驗證**。
+     - 接著是 TVM 0.28 自己的程式產生 bug：把 `int rmod_13 = ...;` 宣告直接塞進運算式中間（`fused` 注意力 kernel），屬於不合語法的 OpenCL C。推測任何驅動都會失敗，**未在其他環境驗證**。
+- **結論**：在主線 Linux + 開源驅動上，越依賴自動產生 GPU 程式的框架，越容易碰到沒人測過的路徑。目前留在 MNN + 自寫 kernel。
+  相關腳本在 `experiments/voice-hub/mlc/`（`pc_build_mlc28.sh`、`phone_runtime_build.sh`、`mlc_build28.sh`、`opencl_local_hoist.py` 等）。
+  若要再試，建議改走 Vulkan 後端（TVM 直接產生 SPIR-V，不經過 OpenCL C 編譯器）。
+
+## 十七、MNN 接進 NLU：系統提示詞快取（2026-11-10，**實機已驗證**）
+
+- **`experiments/voice-hub/mnn_nlu/`**：
+  - `mnn_nlu_worker.cpp`（C++，MNN LLM API）＋ `mnn_openai_server.py`（相容 `/v1/chat/completions`，`nlu.py` 不用改）。
+  - 每個請求以「最後一則使用者訊息之前的全部內容」為前綴。前綴相同時，用 `Llm::eraseHistory` 刪掉前綴之後的 KV（`reuse_kv=true`），只讀入最後那句話。
+  - MNN 內建的 `prompt_cache` 只適用於一路往下接的多輪對話，對「固定前綴＋每次不同的一句」無效，所以自己實作。
+- **延遲**（Qwen3-1.7B，GPU OpenCL fp16，前綴 410 token）：
+
+  | 情況 | 讀入 | 生成約 15 token | 合計 |
+  | --- | --- | --- | --- |
+  | 沒有快取（以 58 tok/s 估算整段 427 token） | 約 7.4 s | 約 1.3 s | 約 8.7 s |
+  | 前綴快取 | 約 1.0 s | 約 1.3 s | **約 2.3 s** |
+
+  - 刪除 KV 本身只是移動長度指標。沿用快取時讀入比不沿用多約 0.5 秒，推測是 MNN 在序列長度改變時重新規劃計算圖，**未深究**。
+  - CPU 效能模式對這個數字沒有影響。
+- **NLU 準確率**（`rules+slots-c`，規則優先，只有規則無法確定時才交給 MNN 上的 Qwen3-1.7B）：
+
+  | 測試集 | 準確率 | 誤執行 |
+  | --- | --- | --- |
+  | tests（46） | 97.8% | 0 |
+  | holdout（34） | 100% | 0 |
+  | user（1） | 100% | 0 |
+  | web（40） | 85.0% | 0 |
+  | 合計 121 | **94.2%** | **0** |
+
+  交給 LLM 的句子每句約 3.3–3.8 s。
+- **過程中修掉的兩個安全問題**：
+  1. MNN 沒有 JSON schema 強制輸出，模型曾回不在選項內的動作（「調濕」「停」）而讓程式當掉。
+     `SlotParser._valid` 現在在程式裡驗證所有欄位，任何不合法的輸出都**不執行、改成反問**。
+  2. 手機沒裝 `pypinyin`，同音字修正一直是靜默關閉。「客聽的燈全部關掉」因此被規則解讀成關掉全家 6 盞燈（誤執行）。
+     已安裝 `python3-pypinyin`，`nlu_rules.py` 改成缺少它時直接報錯（測試可用 `NLU_ALLOW_NO_PINYIN=1` 關閉）。
+- **剩下的錯誤**（web 集 6 句，都沒有執行）：
+  - 「關掉主燈，不對，是床頭燈」（改口）、「客廳的燈」（應反問）、「電扇停掉」（動作超出選項）。
+  - 多房間「廚房跟客廳的燈全部關掉」、「臥室的冷氣幫我打開，二十六度」、「臥房大燈關掉」（規則判斷為反問）。
+
+## 十八、喇叭：用手機麥克風自我驗證（2026-11-10，使用者不在家時播放）
+
+- **方法**（`experiments/voice-hub/audio/speaker_loopback2.sh`）：
+  - DMIC1 以 `hw:0,1` 錄 7 秒，第 2 秒起經 `MultiMedia1 → QUAT_MI2S_RX → TFA9912×2` 播 3 秒 -12 dBFS 的 1 kHz 或 2.5 kHz 正弦波。
+  - 和「不播放」的對照錄音比較同一時窗、同一頻段的能量。
+- **結果：喇叭沒有發聲**。1 kHz 比對照組 -1.2 dB，2.5 kHz 為 -3.0 dB，都在雜訊範圍內。
+- **已確認的事**：
+  - PCM 為 RUNNING，兩顆 TFA9912 都回報 `tfa_dev_start success` 並解除靜音。
+  - QUAT MI2S 腳位：GPIO58–61 都由 `sound` 持有，功能為 `qua_mi2s`；GPIO61（SD1）是輸出。7 月的 SD1 修正**已生效**。
+  - TFA9912 狀態暫存器 0x10 在閒置和播放時都是 `0x001c`：PLLS、CLKS、AMPS 皆為 0，功放沒有收到 I2S 時脈。
+  - **播放期間連續取樣 GPIO58（SCK）、59（WS）、61（SD1）各 300 次，全部恆為高電位**。SoC 沒有送出任何位元時脈、聲道時脈或資料。
+- **判斷**：問題在 SoC/ADSP 端，QUAT MI2S 沒有真正輸出時脈，不在 TFA 驅動或腳位。
+  - 主線 `sdm845.c` 在 startup 對 `Q6AFE_LPASS_CLK_ID_QUAD_MI2S_IBIT` 呼叫 `snd_soc_dai_set_sysclk`，**但忽略回傳值**。若 Razer 原廠 ADSP 拒絕這個時脈請求，會出現「一切正常卻無聲」。
+  - 原廠音效卡驅動（`techpack/audio`）不在公開原始碼中，無法直接對照。
+- **取樣方法已驗證**（`pin_sample_validate.sh`）：
+  - 用同樣的 debugfs 取樣讀 TFA 所在的 I2C 匯流排（QUP5，GPIO85/86）。閒置時 300/300 都是高電位；持續發 I2C 讀取時讀得到低電位（SDA 2 次、SCL 1 次）。
+  - 這證明此方法看得到已切到其他功能的腳位在跳動。I2S 的 WS 若在運作，應約有一半時間是低電位。所以 QUAT MI2S 恆為高電位可以視為「SoC 沒有輸出」。
+- **與 postmarketOS / sdm845-mainline 對照**（lore.kernel.org；GitLab 被 Cloudflare 驗證擋住，未讀到 sdm845-mainline 的 hack commit）：
+  - 一加 6 的喇叭功放（MAX98927）同樣接在 QUAT MI2S，DT 設定與我們**幾乎相同**：`qcom,sd-lines = <1>`、相同的 pinctrl 和 speaker dai-link。
+  - 「quaternary MI2S codec DAI 設為 I2S 格式」的修正已在 6.19-rc3 合入，我們的 7.1 核心已包含。
+  - 2026-10-13 的補丁「Disable the quaternary MI2S bit clock on shutdown」在一加 6 + sdm845-mainline 7.1 上測試：位元時脈會在串流開始時正確設定。
+  - **結論：同一份主線驅動在一加 6 上會輸出時脈，所以差異應在 Razer 特有的部分。**最可能是原廠 ADSP 韌體，加上我們繞過缺少的 `audio_pd` 服務所做的特殊註冊。
+  - DMIC 錄音走 SLIMbus，不需要 LPASS 的 MI2S 位元時脈；QUAT MI2S 需要 ADSP 接受 `Q6AFE_LPASS_CLK_ID_QUAD_MI2S_IBIT` 的時脈請求。這正好吻合「錄音正常、播放沒有時脈」的現象，但**尚未證實**。
+- **拆解原廠韌體**（`aura-p-release-3201-user-full.zip`，P-SMR6-RC001；解到 `output/factory-3201/`，該目錄不進 git）：
+  - 工具：`tools/simg2raw.py` 把稀疏映像轉成 raw，再用 `debugfs` 不掛載讀出 vendor；`tools/ko_data_dump.py` 讀模組資料區。
+  - 原廠音效卡驅動是 `vendor/lib/modules/snd-soc-sdm845.ko`，**沒有移除符號**。TFA 與 q6 DAI 驅動編在 boot 核心內。
+  - `mi2s_clk[QUAT]` = {minor 1, clk_id **0x106**（QUAD_MI2S_IBIT）, **1,536,000 Hz**, attri 1（COUPLE_NO）, root 0}。
+  - `mi2s_rx_cfg[QUAT]` = 48 kHz、S16_LE、2 聲道；原廠 DT `qcom,msm-mi2s-master = <1>`（SoC 為主控端）。**全部與主線相同。**
+  - `msm_mi2s_snd_startup` 依序呼叫 `msm_mi2s_set_sclk`（→ `afe_set_lpass_clock_v2`）、`snd_soc_dai_set_fmt`、`msm_set_pinctrl`，**與主線 `sdm845_snd_startup` 的行為相同**。
+  - 主線時脈請求同樣走服務層的 `AFE_SVC_CMD_SET_PARAM`，失敗時會印 `DSP returned error` / `AFE set params failed`。開機以來多次播放，**一次錯誤都沒有**：ADSP 回報成功，腳位卻沒有輸出。
+- **因此**：音效卡驅動層（時脈參數、格式、主從、呼叫順序）已排除。
+  剩下的差異在 boot 核心內建的 q6 DAI 驅動送給 ADSP 的 I2S 埠設定（`msm-dai-q6-v2`，也在未公開的 techpack 裡），以及 ADSP 韌體本身。
+- **更正：上面「SoC 沒有輸出時脈」的判斷是錯的。**
+  - 主線 `pinctrl-msm` 的 debugfs 對設為輸出（OE=1）的腳位顯示的是輸出暫存器，不是腳位電位。GPIO58/59/61 都帶 `output-high`，所以永遠顯示高。
+  - 用來「驗證方法」的 I2C 腳位不是輸出模式，才讀得到跳動；那次驗證對 I2S 腳位無效。
+  - 反證：3 秒的音檔播放約 3 秒（ADSP 內部時脈在跑）。
+- **真正的原因（已修好，實機已驗證）**：
+  - 還原原廠 boot 核心的符號表（`tools/bootimg_kernel.py`、`tools/kallsyms_extract.py`、`tools/kdis.py`，132,049 個符號）後，確認流程與主線相同，於是改讀功放狀態。
+  - 播放中 TFA9912 的 `0x14 = 0x000c`：**CLKOOR=1（外部時脈超出範圍）**；`0x13` 的 MANWAIT1=1、MANOPER=0；`0x10` 的 PLLS=0、CLKS=0。
+  - 功放的 TDM 設定（來自原廠 `tfa98xx.cnt`）：`0x20` TDMNBCK=2（每框 64 BCK）、`0x21` TDMSLLN=31（32-bit 槽位）。
+  - 原廠 `mixer_paths_tavil.xml` 設 `QUAT_MI2S_RX Format = S24_LE`，即 3.072 MHz 位元時脈。
+    主線 `sdm845.c` 固定用 S16_LE、`MI2S_BCLK_RATE = 1.536 MHz`（每框 32 BCK）。**時脈只有功放預期的一半。**
+  - 把兩顆功放的 TDM 改成 32 BCK／16-bit 槽位／16-bit 取樣後：CLKOOR 清除，狀態變 `0x743e`（PLL 鎖定、時脈穩定、功放啟用），MANSTATE=9（運作中）。
+- **修正**：`rootfs-scripts/razer-speaker-setup.sh` + `.service`（開機自動執行，需要 `i2c-tools`），改寫三個欄位：
+  `0x20` TDMNBCK=0、`0x21` TDMSLLN=15、`0x22` TDMSSIZE=15。寫入不進 MTP、可重複執行；已加入 `scripts/03-refresh-rootfs.sh`。
+- **驗證**（DMIC 回錄，與不播放的對照組比較同一時窗）：
+
+  | 情況 | 1 kHz | 2.5 kHz |
+  | --- | --- | --- |
+  | 修正前 | -1.2 dB | -3.0 dB |
+  | 修正後 | **+66.4 dB** | **+83.9 dB** |
+  | 重開機後第一次播放 | **+65.1 dB** | **+85.6 dB** |
+
+- **正規修正：24-bit 驅動（2026-11-10，實機已驗證，取代上面的 16-bit 繞道）**
+  - 24-bit 的依據來自原廠實際設定，不是官方行銷規格（官方的「24-bit DAC」指 USB-C 耳機轉接器）：
+    - 原廠 `mixer_paths_tavil.xml` 第 566 行 `QUAT_MI2S_RX Format = S24_LE`。
+    - 原廠 `tfa98xx.cnt` 開機寫入 `0x20=0x2890`（64 BCK）、`0x21=0xc1f1`（32-bit 槽位）、`0x22=0x545c`（24-bit 取樣）。
+    - 原廠 `snd-soc-sdm845.ko` 的預設值是 S16／1.536 MHz，由 Android 的 mixer 控制項在執行時改成 S24。
+  - 只改成 24-bit／3.072 MHz 時，功放鎖定、MANSTATE=9，**但仍幾乎無聲**。查出兩個獨立的原因：
+    1. ADSP（NULL COPP 拓撲）不會在 ASM（前端 16-bit）和 ADM（後端 24-bit）之間縮放，樣本落在低位元，約小 48 dB。直接送 S24 前端時，同一路徑的上升量是 +18.7 dB。
+    2. 原廠設定檔 `TDMADJ=1`（0x21 bit15）是右對齊；主線 q6afe 送的是標準 I2S（MSB 靠左、延遲 1 BCK）。
+       - 0x41f1：+67 dB，乾淨。
+       - 0x01f1：小約 6 dB。
+       - 0x81f1：諧波和基頻一樣大。
+       - 0xc1f1：+22.8 dB。
+       - 所以標準 I2S 的正確值是 0x41f1。
+  - 修正（模組編譯，不換核心；vermagic 相同；`scripts/build-sdm845-sndcard-module.sh`，約 34 秒）：
+    - `kernel-patches/0016-asoc-qcom-sdm845-quat-mi2s-24bit.patch`：QUAT_MI2S_RX 用 S24_LE、3.072 MHz，並把播放前端限制為 S24_LE，由 ALSA plug 層把 16-bit 轉成 24-bit。
+    - `kernel-patches/0017-asoc-tfa98xx-force-standard-i2s-alignment.patch`：TFA 驅動寫完設定檔後，若 DAI 格式是 I2S，強制 TDMDEL=1、TDMADJ=0。其他原廠設定（喇叭保護、校正）不動。
+    - 安裝／回滾：`experiments/voice-hub/audio/sndcard_install.sh install <ko>... | rollback`，需要重開機，原廠模組已備份在 `/var/lib/razer-sndcard/`。安裝時會停用 `razer-speaker-setup`。
+  - 驗證（重開機後，以 `plughw:0,0` 播一般 16-bit 檔；前端 hw_params 顯示為 S24_LE）：1 kHz **+68.8 dB**、2.5 kHz **+83.7 dB**。
+    - 開機後第一次串流，unmute 後 8 ms 內就把 0x21 改成 0x41f1。
+  - 副作用：
+    - 用 `hw:0,0` 直接開 S16 現在會報錯，不會再無聲。
+    - 播放前端一律是 24-bit；若日後要用 16-bit 後端（例如 SLIMbus 聽筒），需要重新處理。
+- **尚未做**：
+  - 若之後重新編整顆核心，0016 和 0017 會隨 `kernel-patches/` 一起套用；`razer-speaker-setup` 已改成自動偵測：`/proc/kallsyms` 有 `sdm845_fe_startup`（patch 0016）時直接跳過，所以 03-refresh-rootfs 照常安裝也不會衝突。已在手機上驗證：跳過後 1 kHz 仍是 +68.0 dB。
+  - 音量、音質、左右聲道、長時間播放的溫度都還沒有人實際聽過或量過；目前只證明有聲音輸出。
+- **（以下為修好前的紀錄）卡住的地方**：這個核心沒有編入 dynamic debug、ftrace、kprobe，無法在使用者空間看到 ADSP 的回應。
+  下一步需要**新核心**：開啟上述除錯功能，或在 `sdm845.c` 印出 `set_sysclk` 和 AFE port start 的回傳值。這需要刷機，依約定要等使用者在場。
+
 ### 5.3 HA token
 
 - 新增 `experiments/voice-hub/ha.env.example`。
 - 使用者複製成 `ha.env` 並填好後，由我用 scp 放到手機的 `~/.config/razer-voice/ha.env`，權限設為 600。
 - `ha.env` 已加入 `.gitignore`。
+
+## 十九、中控台接上 HA 與語音、觸控與按鍵修正（2026-11-10 晚～11-11，**實機已驗證**，使用者在場操作）
+
+### 19.1 架構
+
+- 新增 `hub-agent/`（Python，使用者服務 `razer-hub-agent`，開機自動啟動）：
+  - `ha.py`：HA WebSocket（登入、區域／裝置／實體登錄、即時 `state_changed`、服務呼叫），斷線自動重連。
+  - `devices.py`：
+    - 從 HA 產生中控台卡片與 NLU 用的 `home` 登錄。
+    - 排除停用、隱藏、設定／診斷類實體（例如插座的「兒童鎖」）。
+    - 名稱含「燈」的開關當成燈。
+    - 離線裝置不會成為語音目標。
+  - `voice.py`：
+    - DMIC（hw:0,1，48 kHz）→ 16 kHz。
+    - 喚醒詞「嘿賈伯斯」使用 sherpa-onnx KWS。
+    - silero VAD 切出一句話，再交給 SenseVoice 辨識，OpenCC 轉繁體。
+  - `hub_agent.py`：
+    - NLU 先走規則；規則信心低、且 MNN slot 伺服器有開時，才走 LLM。
+    - 經 `validate()` 驗證後才呼叫 HA。
+    - 提供 Unix socket `$XDG_RUNTIME_DIR/razer-hub.sock` 給 UI。
+- UI（`hub-ui`）不直接連 HA，只透過 socket 和 agent 溝通：
+  - 點卡片切換開關；長按進入編輯，可拖曳、隱藏、用語音改名。
+  - 麥克風按鈕觸發聆聽，語音狀態顯示在畫面上。
+  - 隱藏的裝置同時排除在語音控制之外。改名只存在中控台（`layout.json`），HA 原名保留為別名。
+- 開機預設：`hub-sway`、`razer-hub-agent` 已啟用，`razer-control-panel` 已停用（沒有刪除）。重開機驗證：兩個服務都自動啟動，HA 自動連線。
+
+### 19.2 實測結果
+
+- HA 2026.7.4：讀到 5 個區域、12 個可控裝置。
+  - 使用者隱藏了 4 個重複的冷氣，並把「HomeKit 冷氣代理」改名為「冷氣」。
+  - 之後「開冷氣」「冷氣27度」「關冷氣」都只會控制它。
+- 喚醒詞：
+  - 舊參數（keywords_score 1.0）是用 TTS 合成語音測出來的，對真人聲完全喚不醒。
+  - 用真人錄音分析（`hub-agent/kws_tune.py`）後改成 3.0，之後實測多次都能喚醒。
+  - **誤喚醒率還沒量測。**
+- 辨識：一句指令 0.6–1.3 秒，SenseVoice 只花 0.18–0.26 秒。曾有一次把「開風扇」聽成「通扇」，重說一次就成功。
+- 提示音：
+  - 原本 880–1760 Hz 的純音，使用者覺得太尖、太小聲。
+  - 試聽四種音色後，選了「柔和三連音」：392–784 Hz，奇次諧波快速衰減，峰值 -8 dBFS。
+  - 系統音量 25% 在 PipeWire 的三次方曲線下大約是 -36 dB，這也是一開始「太小聲」的原因。
+- 窗簾機器人：
+  - HA 把任何大於 0% 的位置都算「開啟」，而且藍牙裝置可能超過 8 秒才回應。
+  - 改成窗簾最多等 30 秒，逾時顯示「指令已送出，裝置回應較慢」，不再報錯；卡片也會顯示目前開啟的百分比。
+
+### 19.3 觸控、按鍵、桌面
+
+- 觸控位置不準：
+  - 原因是 sway 只把畫面轉了 90 度，沒有一起轉觸控座標。
+  - 請使用者點四個角量測後，設定 `calibration_matrix 0 1 0 -1 0 1`，使用者確認已準確。
+- 拖曳卡片會抖：
+  - 卡片跟著手指移動，拖曳位移卻用卡片自己的座標計算，形成回饋迴圈。
+  - 改成「手指位移 + 目前偏移量」。
+- 音量鍵：
+  - 音量下鍵其實接在 PMIC 的 RESIN 腳位（原廠 DTB 的 `qcom,pon_2` → `KEY_VOLUMEDOWN`），我們的 DTS 誤寫成 GPIO5。
+  - 修正 DTB 並寫入 boot_a（boot-resin-2026-11-10.img，只有 DTB 不同）。
+  - 第一次開機卡在 4.95 秒、沒有網路；使用者手動重開一次就正常。原因不明，**需要觀察是否會再發生**。
+  - 音量條動畫原本不出現：sway 設定裡的 `;` 會被當成 sway 指令的分隔符號，所以改用 `sh -c` 包起來。
+- 齒輪設定面板：
+  - 可調亮度、音量，顯示 Wi-Fi、電量、時區（網路自動校時）。
+  - 可還原隱藏的裝置與自訂名稱，也可以切換到除錯桌面。
+- 除錯桌面 Phosh：
+  - 原本因為缺少 `gnome-session` 根本起不來，補裝後可以使用。
+  - 只把 Phosh 設成繁體中文。Phosh 會把 `LANGUAGE=zh_TW` 帶進使用者環境，讓 nmcli 輸出「是」而不是「yes」；中控台改成強制 `LC_ALL=C` 並移除這個變數，修好了 Wi-Fi 顯示。
+  - 若中控台連續當掉 5 次，會自動切到 Phosh；切換失敗時 20 秒後自動回到中控台。
+- 喇叭左右聲道：
+  - 中控台的擺法是聽筒那端朝左，這時左聲道會從右邊出聲。
+  - 用 WirePlumber 規則把聲道對調（`51-razer-speaker-swap.lua`），使用者聽過確認正確。
+
+### 19.4 尚未解決
+
+- **白線（螢幕驅動問題）**：麥克風附近的畫面一有變化（動畫、滑桿），就會出現一條直的白線。
+  - 全解析度截圖（含游標）都看不到，代表合成後的畫面本身是乾淨的。
+  - 改成每一幀整個畫面重畫（`WLR_SCENE_DEBUG_DAMAGE=rerender`）也沒有用。
+  - 換算回面板的直式原生座標，這條線是固定一列、只出現在右半邊（約 x 640–1440）。疑似 DSC 分片的傳輸問題，要另外處理顯示驅動。
+- **時鐘**：開機後約一分鐘內，時間會是錯的，要等網路校時；之後才正確。
+- **語意理解**：「好熱」這類間接說法，在 MNN slot LLM 伺服器沒開的時候會被拒絕。這個伺服器目前沒有設成服務。
+- **誤喚醒率**：還沒有用電視、聊天這類長時間背景聲音量測過。
+
+### 19.5 開啟 LLM 語意理解、夜間設定（2026-11-11 凌晨，使用者睡覺時以文字測試，**未發出聲音**）
+
+- 新增使用者服務 `razer-mnn-nlu`（`hub-agent/razer-mnn-nlu.service`，開機自動啟動）：
+  - 在 GPU（OpenCL fp16）上跑 Qwen3-1.7B，綁在大核 4–7，提供 `127.0.0.1:8091`。
+  - 常駐後系統用量約 2.5 GB。
+  - 只有規則沒把握時才會交給 LLM，每句約 3–6 秒。
+- 在真實裝置上發現的問題與修正：
+  - MNN 無法限制模型只能從選項中挑，「好熱喔」時模型直接把 `action` 填成「好熱」，因此不合法而改成反問。
+    - `nlu_slots.py` 新增 `_normalize_actions`，把熱、冷、暗、亮與一般動詞對應到固定的動作。
+    - 若因此得出明確動作，就從「反問」改成「控制」。
+  - 「好熱」時冷氣若是關著的，就先開冷氣再調溫度。
+  - 只能開關、不能調亮度的燈：「調亮」等於打開；「調暗」維持反問，**不會因此關燈**。
+  - HA 的區域沒有別名，所以加了常用說法：臥室 ↔ 房間、臥房、主臥、睡房、寢室；廁所 ↔ 浴室、洗手間等。
+- 實機測試（不實際執行，只看解讀結果）：
+
+  | 句子 | 結果 |
+  | --- | --- |
+  | 好熱喔 | 開冷氣，設 26° |
+  | 房間好暗 | 打開床頭燈與房間燈 |
+  | 臥房的燈關掉 | 規則判斷：已經是關的，不動作 |
+  | 有點冷 | 反問（模型誤判成「燈調亮」，但選擇了反問，沒有執行） |
+  | 太亮了 | 反問 |
+  | 我要睡了 | 反問 |
+
+- 測試集（`rules+slots-c`，1.7B）重跑兩次：**113/121 = 93.4%，誤執行 0**。
+  - 前次是 94.2%。差別是 web 集「我好冷」這一句：這次模型直接回「拒絕」且沒有任何項目，和這次的修改無關，屬於 GPU fp16 輸出不完全固定造成的變動。
+- 夜間設定（`~/.config/razer-hub/agent.env`）：
+  - `HUB_QUIET_HOURS=23-8`：這段時間不發出提示音。
+    - 使用者想要的是「暗就靜音、亮就有聲」，要等光線感測器（SLPI）移植後才能做到，目前先用時間判斷。
+  - `HUB_WAKE_LOG_ONLY_UNTIL=2026-11-11T08:30`：今晚的喚醒只記到 `~/.local/state/razer-hub/wake-log.txt`，不執行指令，用來量測誤喚醒次數。按麥克風按鈕仍然正常。
