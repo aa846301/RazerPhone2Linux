@@ -1,6 +1,6 @@
 # User unit (klipper): MNN LLM server for the hub agent's constrained-slot NLU (rules fall back to it when
-# unsure). OpenAI-style /v1/chat/completions on 127.0.0.1:8091; Qwen3-1.7B on the Adreno 630 (rusticl, fp16),
-# the combination measured at 94.2% with 0 wrong executions (report §17).
+# unsure). OpenAI-style /v1/chat/completions on 127.0.0.1:8091; Qwen3-1.7B on the CPU (big cores 4-7).
+# NLU eval on this exact setup: 113/121 = 93.4%, 0 wrong executions (report §19.5).
 # Install: ~/.config/systemd/user/razer-mnn-nlu.service ; systemctl --user enable --now razer-mnn-nlu
 [Unit]
 Description=Razer hub LLM (MNN Qwen3-1.7B slot parser)
@@ -11,7 +11,12 @@ Environment=RUSTICL_ENABLE=freedreno
 Environment=OCL_ICD_VENDORS=/opt/mesa-26.2.6/etc/OpenCL/vendors
 Environment=LD_LIBRARY_PATH=/opt/mesa-26.2.6/lib/aarch64-linux-gnu
 WorkingDirectory=%h/voice/mnn_nlu
-ExecStart=/usr/bin/taskset -c 4-7 /usr/bin/python3 %h/voice/mnn_nlu/mnn_openai_server.py ./mnn_nlu_worker %h/voice/models/mnn/Qwen3-1.7B-MNN/config.json {"backend_type":"opencl","precision":"low","thread_num":4} 8091
+# The JSON must be single-quoted: systemd strips bare double quotes, the worker then gets invalid JSON, ignores
+# it and silently runs with config.json's defaults (found 2026-11-11).
+# CPU, not the GPU: measured on the live prompt (821-token prefix), a cache hit takes 2.5-2.7 s on the CPU vs
+# 3.1-3.7 s on the GPU; only a cold prefix rebuild is faster on the GPU (19 s vs 39 s), and the hub agent pre-warms
+# the prefix in the background, so the per-command latency is what users feel.
+ExecStart=/usr/bin/taskset -c 4-7 /usr/bin/python3 %h/voice/mnn_nlu/mnn_openai_server.py ./mnn_nlu_worker %h/voice/models/mnn/Qwen3-1.7B-MNN/config.json '{"backend_type":"cpu","precision":"low","thread_num":4}' 8091
 Restart=on-failure
 RestartSec=10
 

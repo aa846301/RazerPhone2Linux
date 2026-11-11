@@ -7,7 +7,10 @@ import json
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+STARTED = time.time()
 
 worker_bin, config, extra = sys.argv[1:4]
 port = int(sys.argv[4]) if len(sys.argv) > 4 else 8091
@@ -51,7 +54,8 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        self._send(200, {"status": "ok"})
+        # "started" lets clients notice a restart (the worker's prefix KV cache is empty again).
+        self._send(200, {"status": "ok", "started": STARTED})
 
     def do_POST(self):
         if not self.path.endswith("/chat/completions"):

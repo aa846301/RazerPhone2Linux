@@ -101,8 +101,11 @@ def nlu_home(snapshot, hidden=(), names=None):
     for aid, aname in areas.items():
         home["areas"][aid] = [aname] + [a for a in AREA_ALIASES.get(aname, ()) if a not in areas.values()]
     for eid, st, ent, area in controllable(snapshot):
-        if eid in hidden or st.get("state") in ("unavailable", "unknown"):
-            continue                       # hidden on the hub, or offline: never a voice target
+        if eid in hidden:
+            continue                       # hidden on the hub: never a voice target
+        # Offline devices stay in the registry (so the LLM prompt, and its prefix cache, do not change every time
+        # a plug drops off Wi-Fi) but are not allowed: validate() rejects them.
+        online = st.get("state") not in ("unavailable", "unknown")
         domain = eid.split(".", 1)[0]
         attrs = st.get("attributes", {})
         ha_name = attrs.get("friendly_name") or eid
@@ -110,6 +113,11 @@ def nlu_home(snapshot, hidden=(), names=None):
         aliases = list((ent or {}).get("aliases") or [])
         if name != ha_name:
             aliases.append(ha_name)
+        # Smart-plug entities are named like "檯燈 插座 1": people say "檯燈" (2026-11-11: 「檯燈打開」 fell back to
+        # the generic 燈 and asked about other lamps).
+        short = re.sub(r"\s*(插座|socket|plug|outlet)\s*\d*$", "", name, flags=re.I).strip()
+        if short and short != name and short not in aliases:
+            aliases.append(short)
         aname = areas.get(area, "") if area else ""
         if aname and name.startswith(aname) and len(name) > len(aname):
             aliases.append(name[len(aname):])           # "主臥燈" also answers to "燈" within 主臥
@@ -119,7 +127,7 @@ def nlu_home(snapshot, hidden=(), names=None):
             features.append("brightness")
         nlu_domain = "light" if (domain == "switch" and "燈" in name) else domain
         e = {"entity_id": eid, "name": name, "aliases": aliases, "area": area, "domain": nlu_domain,
-             "ha_domain": domain, "features": features, "allowed": True}
+             "ha_domain": domain, "features": features, "allowed": online}
         if domain == "climate":
             e["min_temp"] = attrs.get("min_temp", 16)
             e["max_temp"] = attrs.get("max_temp", 30)

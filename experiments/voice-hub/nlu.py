@@ -251,6 +251,20 @@ def make_backend(name, home, url):
         from nlu_skill import Skill
         sk = Skill(home, mode="long" if name.endswith("long") else "short")
         return lambda t: skill_parse(sk, home, t, url)
+    if name == "rules+rewrite":
+        # Rules first; when unsure, the LLM paraphrases into a canonical command that the rules execute.
+        from nlu_rewrite import RewriteParser
+        from nlu_rules import RuleParser
+        rw, rp = RewriteParser(home, url), RuleParser(home)
+
+        def run_rewrite(t):
+            t0 = time.time()
+            r = rp.parse(t)
+            if r.get("_conf") == "high":
+                return r, time.time() - t0, {}
+            p, _, tm = rw.parse(t)
+            return p, time.time() - t0, tm
+        return run_rewrite
     if name in ("slots", "rules+slots", "agree", "slots-c", "rules+slots-c"):
         from nlu_slots import SlotParser
         from nlu_rules import RuleParser
@@ -299,7 +313,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", choices=["eval", "parse"])
     ap.add_argument("text", nargs="?")
-    ap.add_argument("--backend", default="llm", choices=["llm", "llm-strict", "llm-skill", "llm-skill-long", "slots", "rules+slots", "agree", "slots-c", "rules+slots-c",
+    ap.add_argument("--backend", default="llm", choices=["llm", "llm-strict", "llm-skill", "llm-skill-long", "slots", "rules+slots", "agree", "slots-c", "rules+slots-c", "rules+rewrite",
                              "rules", "hybrid", "hassil"])
     ap.add_argument("--url", default="http://127.0.0.1:8080")
     ap.add_argument("--tests", default=os.path.join(HERE, "tests.jsonl"))

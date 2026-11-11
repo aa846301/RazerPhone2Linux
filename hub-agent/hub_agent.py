@@ -57,7 +57,10 @@ class Agent:
         self._dirty = threading.Event()
         self.slots_url = os.environ.get("HUB_SLOTS_URL", "http://127.0.0.1:8091")
         self.ha = HA(env["HA_URL"], env["HA_TOKEN"], log, self._dirty.set)
+        self._warm_req = threading.Event()
+        self._warm_hash = None
         threading.Thread(target=self._publisher, name="publish", daemon=True).start()
+        threading.Thread(target=self._llm_warmer, name="llm-warm", daemon=True).start()
         self.voice = None
         if not os.environ.get("HUB_NO_VOICE"):
             try:
@@ -83,6 +86,48 @@ class Agent:
             time.sleep(0.15)
             self._dirty.clear()
             self._send_state()
+            self._warm_req.set()
+
+    def _llm_warmer(self):
+        """Keep the LLM server's prefix cache on *our* system prompt. The MNN worker caches one prefix; a miss
+        re-reads ~820 tokens and costs ~35-40 s (measured 2026-11-11), a hit ~2.6 s. The prompt depends only on
+        device names/rooms (not on states), so it changes rarely: at start, on hide/rename, or after something
+        else (an eval run) used the server. Re-prime it in the background whenever it changed."""
+        time.sleep(10)        # let the UI reconnect and send hidden/names first, or the first warm-up is wasted
+        server_started = None
+        while True:
+            self._warm_req.wait(timeout=30)
+            # A restarted LLM server has an empty prefix cache: re-prime even if our prompt did not change.
+            try:
+                with urllib.request.urlopen(self.slots_url + "/health", timeout=1) as r:
+                    started = json.load(r).get("started")
+                if started != server_started:
+                    server_started, self._warm_hash = started, None
+                    self._warm_req.set()
+            except Exception:
+                pass
+            if not self._warm_req.is_set():
+                continue
+            time.sleep(2)                      # debounce bursts of HA events
+            self._warm_req.clear()
+            snap = self.ha.snapshot()
+            if not snap[4]:
+                continue
+            sp = self._llm_parser(devices.nlu_home(snap, self.hidden, self.names))
+            h = hash(sp.system)
+            if h == self._warm_hash:
+                continue
+            if not self._slots_up():
+                self._warm_req.set()
+                time.sleep(15)                 # server still loading: retry
+                continue
+            t0 = time.time()
+            try:
+                sp.ask("你好")
+                self._warm_hash = h
+                log(f"LLM prompt cache primed in {time.time() - t0:.1f}s (system_hash={h & 0xffff:04x})")
+            except Exception as e:
+                log(f"LLM warm-up failed: {e!r}")
 
     def _send_state(self, conn=None):
         snap = self.ha.snapshot()
@@ -153,6 +198,7 @@ class Agent:
             self.voice.cancel()
         elif cmd == "hidden":
             self.hidden = set(m.get("ids") or [])
+            self._warm_req.set()
         elif cmd == "names":
             self.names = {k: v for k, v in (m.get("map") or {}).items() if v}
             self._dirty.set()
@@ -229,42 +275,110 @@ class Agent:
         except Exception:
             return False
 
+    def _llm_parser(self, home):
+        """LLM fallback: 'rewrite' (default; paraphrase to a canonical command that the rules execute) or the
+        older constrained-slot JSON parser ('slots'), via HUB_NLU_LLM."""
+        if os.environ.get("HUB_NLU_LLM", "rewrite") == "slots":
+            from nlu_slots import SlotParser
+            return SlotParser(home, self.slots_url, compact=True)
+        from nlu_rewrite import RewriteParser
+        return RewriteParser(home, self.slots_url)
+
     def _plan(self, text):
-        """NLU only: (home, proposal, validated result, parser used)."""
+        """Flow (user's design, 2026-11-11): rules first; only if they are unsure, the LLM rewrites the sentence
+        into a canonical command and the rules parse that; anything still unclear -> "不能理解，請重新再說一次"."""
         from nlu import validate
         from nlu_rules import RuleParser
-        home = devices.nlu_home(self.ha.snapshot(), self.hidden, self.names)
+        from nlu_rewrite import RewriteParser
+        snap = self.ha.snapshot()
+        home = devices.nlu_home(snap, self.hidden, self.names)
+        hidden_hit = self._hidden_mention(snap, home, text)
+        if hidden_hit:
+            msg = f"「{hidden_hit}」已在中控台隱藏，不能用語音控制"
+            log(f"NLU[hidden] {text!r} -> {msg}")
+            return {"via": "hidden", "proposal": {"actions": [], "reject": msg}, "actions": [], "errors": [],
+                    "confirm": False, "clarify": None, "reject": msg}
         prop = RuleParser(home).parse(text)
         via = "rules"
-        if prop.get("_conf") == "low" and self._slots_up():
-            from nlu_slots import SlotParser
-            prop, _, _ = SlotParser(home, self.slots_url, compact=True).parse(text)
-            via = "slots"
+        if prop.get("_conf") == "low":
+            if self._slots_up():
+                lp = self._llm_parser(home)
+                prop, dt, tm = lp.parse(text)
+                via = "llm"
+                log(f"LLM {dt:.1f}s reused={tm.get('reused')} prompt_n={tm.get('prompt_n')} "
+                    f"cache_n={tm.get('cache_n')} rewrite={prop.get('_rewrite')!r} slots={prop.get('_slots')}")
+            else:
+                prop = {"actions": [], "clarify": RewriteParser.NOT_UNDERSTOOD}
+                via = "rules (LLM offline)"
         res = validate(home, prop)
-        log(f"NLU[{via}] {text!r} -> {res}" + (f" slots={prop.get('_slots')}" if via == "slots" else ""))
+        log(f"NLU[{via}] {text!r} -> {res}")
         return {"via": via, "proposal": {k: v for k, v in prop.items() if not k.startswith("_")}, **res}
+
+    def _hidden_mention(self, snap, home, text):
+        """Name of a hidden device mentioned in text, unless that name also belongs to a visible device
+        (e.g. the user renamed one AC to 冷氣 and hid the others called 冷氣: 冷氣 must still work)."""
+        if not self.hidden:
+            return None
+        def terms(entities):
+            return {t for e in entities for t in [e["name"], *e.get("aliases", [])] if t}
+        visible = terms(home["entities"])
+        everything = devices.nlu_home(snap, (), self.names)
+        hidden = terms(e for e in everything["entities"] if e["entity_id"] in self.hidden) - visible
+        hits = [t for t in hidden if t in text]
+        return max(hits, key=len) if hits else None
+
+    @staticmethod
+    def _explain(errors, ents):
+        """validate() error strings -> reasons the user can act on."""
+        def name(eid):
+            return ents.get(eid, {}).get("name", eid)
+        out = []
+        for e in errors:
+            m = re.match(r"(unknown entity|entity not allowed) (\S+)", e)
+            if m:
+                out.append(f"{name(m.group(2))}目前離線或不能控制" if m.group(1) == "entity not allowed"
+                           else "找不到這個裝置")
+                continue
+            m = re.match(r"op (\S+) unsupported for (\S+)", e)
+            if m:
+                out.append(f"{name(m.group(2))}不支援這個操作")
+                continue
+            m = re.match(r"temperature (\S+) out of range (\S+)-(\S+)", e)
+            if m:
+                out.append(f"溫度要在 {float(m.group(2)):g}–{float(m.group(3)):g} 度之間")
+                continue
+            m = re.match(r"missing value for (\S+)", e)
+            if m:
+                out.append(f"{name(m.group(1))}要設成多少呢？")
+                continue
+            if "out of range" in e:
+                out.append("數值要在 0–100 之間")
+                continue
+            out.append(e)
+        return "；".join(dict.fromkeys(out))
 
     def _execute(self, text):
         snap = self.ha.snapshot()
         if not snap[4]:
             return False, "HA 未連線"
+        from nlu_rewrite import RewriteParser
         home = devices.nlu_home(snap, self.hidden, self.names)
+        ents = {e["entity_id"]: e for e in home["entities"]}
         plan = self._plan(text)
         prop, res = plan["proposal"], plan
         if res.get("confirm"):
             return False, "這個操作需要確認，請在畫面上操作"
         if not res["actions"]:
-            if res.get("clarify"):
+            if res.get("errors"):                       # validation: say why (offline, out of range, ...)
+                return False, "做不到：" + self._explain(res["errors"], ents)
+            if res.get("clarify"):                      # ambiguity ("哪一台冷氣？") or not understood
                 return False, res["clarify"]
             if res.get("reject"):
                 return False, res["reject"]
-            if res.get("errors"):
-                return False, "做不到：" + "；".join(res["errors"][:2])
             if prop.get("actions"):
                 return True, "設備已經是這個狀態了"
-            return False, "我不太懂這句話，可以換個說法嗎？"
-        ents = {e["entity_id"]: e for e in home["entities"]}
-        done = []
+            return False, RewriteParser.NOT_UNDERSTOOD
+        done, failed = [], []
         for a in res["actions"]:
             eid, op = a[0], a[1]
             val = a[2] if len(a) > 2 else None
@@ -276,7 +390,13 @@ class Agent:
             except TimeoutError:
                 log(f"{domain}.{service} {eid}: sent, no confirmation yet")
                 done.append(self._describe(e["name"], op, val) + "（裝置沒有回報結果）")
-        return True, "已" + "、".join(done)
+            except Exception as ex:                     # HA error: show it as-is (user's request)
+                log(f"HA error {domain}.{service} {eid} {data}: {ex!r}")
+                failed.append(f"{e['name']}：HA 回報 {domain}.{service} 失敗：{ex}")
+        msg = ("已" + "、".join(done)) if done else ""
+        if failed:
+            return False, (msg + "\n" if msg else "") + "\n".join(failed)
+        return True, msg
 
     @staticmethod
     def _describe(name, op, val):
