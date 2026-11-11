@@ -136,6 +136,12 @@ class Voice:
         self.on_state = on_state            # (state, text)
         self.on_utterance = on_utterance    # (text) -> None, called on a worker thread
         self.chimes = make_chimes(os.path.expanduser("~/.cache/razer-hub/chimes"))
+        try:
+            from light import LightSensor
+            self.light = LightSensor(log)
+        except Exception as e:
+            log(f"light sensor unavailable: {e!r}")
+            self.light = None
         self._listen_req = threading.Event()
         self._cancel = threading.Event()
         self.busy = False
@@ -182,10 +188,12 @@ class Voice:
     def cancel(self):
         self._cancel.set()
 
-    @staticmethod
-    def quiet_now():
-        """HUB_QUIET_HOURS="23-8" (default): no chimes in that local-time window (wraps midnight).
-        TODO: use the ambient light sensor instead once it is ported (user: dark room = asleep)."""
+    def quiet_now(self):
+        """No chimes when the room is dark (ambient light sensor; user: dark room = asleep, light on = awake).
+        Without a fresh light reading, fall back to HUB_QUIET_HOURS="23-8" (local time, wraps midnight)."""
+        light = getattr(self, "light", None)
+        if light is not None and light.fresh():
+            return light.dark
         spec = os.environ.get("HUB_QUIET_HOURS", "23-8")
         try:
             a, b = (int(v) for v in spec.split("-"))

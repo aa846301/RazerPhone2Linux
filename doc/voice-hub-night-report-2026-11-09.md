@@ -878,3 +878,56 @@
   - `HUB_QUIET_HOURS=23-8`：這段時間不發出提示音。
     - 使用者想要的是「暗就靜音、亮就有聲」，要等光線感測器（SLPI）移植後才能做到，目前先用時間判斷。
   - `HUB_WAKE_LOG_ONLY_UNTIL=2026-11-11T08:30`：今晚的喚醒只記到 `~/.local/state/razer-hub/wake-log.txt`，不執行指令，用來量測誤喚醒次數。按麥克風按鈕仍然正常。
+
+## 二十、光線感測器移植與誤喚醒量測（2026-11-11 早上，**實機已驗證**）
+
+### 20.1 誤喚醒（第一晚）
+
+- 量測期間：00:57–08:30，約 7.5 小時。
+  - 服務在這段時間沒有重啟、也沒有錯誤；這段期間的喚醒只記錄、不執行。
+- **結果：誤喚醒 0 次**（`keywords_score=3.0`）。
+- 限制：只測了安靜臥室的夜間。開著電視或有人聊天的環境還沒測。
+
+### 20.2 架構與為什麼要放在使用者空間
+
+- 光線／距離感測器是 **Sensortek STK3x1x**，接在感測器處理器 SLPI 自己的 I2C 匯流排上（bus 1，位址 0x48）。
+  - 依據：Razer 的 SLPI 韌體內含 stk3x1x、rpr0521、bmi160、bmm150 驅動。
+  - 原廠設定 `sdm845_stk3x1x_0.json` 的 soc_id 是 321（SDM845）；rpr0521 的設定是 soc 341，不是這支手機。
+- Linux 無法直接存取 SLPI 的 I2C，所以主線的 `stk3310.c` 驅動用不上；只能經由 SLPI 韌體取得資料。
+- SLPI 開機時會透過 FastRPC 向主系統要檔案（設定、registry）。主線核心已有 fastrpc 驅動（`/dev/fastrpc-sdsp`），負責「傳訊息」；「把檔案送給 DSP」依 Linux 慣例放在使用者空間，和數據機的 rmtfs、Wi-Fi 的 tqftpserv 同一類。
+  - 使用者問過能不能做成核心模組。結論：可以但沒有人寫過，要從頭寫，而且出錯會讓整個核心當機；放在使用者空間比較安全。
+
+### 20.3 做法
+
+- 程式碼（使用者同意後在手機上編譯，安裝到 `/usr/local`）：
+  - linux-msm/hexagonrpc：`hexagonrpcd` 與 `sscregistrygen`。
+  - libssc：`ssccli`。
+  - 建置依賴：meson ≥ 1.4 用 PyPI 版（Ubuntu 只有 1.3.2），另外裝了 libqmi-glib-dev、libmbim-glib-dev、libprotobuf-c-dev、protobuf-compiler。
+- 檔案（`scripts/extract-sensor-firmware.sh`，這些是專有檔案，**不進 git**）→ 手機的 `/usr/share/qcom/sdm845/Razer/aura/`：
+  - `dsp/sdsp`：原廠 dsp 映像，21 個 SLPI 使用者空間函式庫。
+  - `sensors/config`：原廠 vendor 映像 `/etc/sensors/config`，86 個 JSON。
+  - `sensors/sns_reg.conf`。
+  - `socinfo/`：主線核心沒有 `hw_platform`，所以補上 MTP 與 soc_id 321。
+  - `sensors/registry`：hexagonrpcd 不允許寫入，第一次啟動時 SLPI 想寫 registry 會被擋下。改用 `sscregistrygen -p MTP -s 321` 預先產生，共 298 項，包含 `stk3x1x_0.ambient_light` 與 `.proximity`。
+- 開機服務：`rootfs-scripts/hexagonrpcd-sdsp.service`（使用者同意後啟用）。
+
+### 20.4 實測
+
+- 一般使用者執行 `ssccli --sensor light` 就能讀到數值。
+- 使用者遠端開關臥室燈時：
+
+  | 情況 | 讀值 |
+  | --- | --- |
+  | 關燈（早上） | 20 lux |
+  | 開燈 | 122 lux（不到 1 秒就變化） |
+  | 再關燈 | 21 lux |
+
+- `hub-agent/light.py`：
+  - 持續讀值並平滑。
+  - 低於 5 lux 持續 30 秒就判定為暗，提示音關閉；高於 12 lux 就恢復。
+  - 超過 60 秒沒有讀值時，改回 23–8 點的時間規則。
+  - 目前讀值 36 lux，判定為亮。
+- **尚未驗證**：
+  - 夜間關燈時的實際 lux，以及 5 lux 的門檻是否合適。
+  - 重開機後整條路徑能否自動恢復（使用者不在，沒有重開機）。
+  - 距離感測器沒有任何輸出（可能只在變化時才回報），還沒追查。

@@ -1,0 +1,17 @@
+# Serve the SLPI (sensor DSP) its files over FastRPC so the Qualcomm Sensor Core comes up on mainline.
+# Files: /usr/share/qcom/sdm845/Razer/aura/{dsp/sdsp, sensors/config, sensors/registry, sensors/sns_reg.conf,
+# socinfo} built from the factory images (see doc/voice-hub-night-report §20). hexagonrpcd is read-only, so the
+# registry is pre-generated with: sscregistrygen -p MTP -s 321 sensors/config sensors/registry
+# Upstream: https://github.com/linux-msm/hexagonrpc (built and installed to /usr/local).
+[Unit]
+Description=FastRPC file server for the SLPI sensor DSP (hexagonrpcd)
+After=dev-fastrpc\x2dsdsp.device
+Wants=dev-fastrpc\x2dsdsp.device
+
+[Service]
+ExecStart=/usr/local/bin/hexagonrpcd -f /dev/fastrpc-sdsp -d sdsp -s
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
