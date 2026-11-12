@@ -1,0 +1,4 @@
+# /etc/udev/rules.d/91-razer-hub-haptics.rules
+# Let the hub UI (user klipper, group video) drive the PMIC haptics for button "ticks". Only this one input node
+# is opened up; the user is deliberately not added to the input group (that would expose touch/keys too).
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{name}=="spmi_haptics", GROUP="video", MODE="0660"

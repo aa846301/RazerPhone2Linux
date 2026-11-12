@@ -12,6 +12,7 @@ slint::include_modules!();
 
 mod agent;
 mod backlight;
+mod haptic;
 mod devices;
 mod status;
 
@@ -74,8 +75,75 @@ struct UiState {
     model: Rc<VecModel<Device>>,
 }
 
+/// Last music report: position at a wall-clock time, so the progress bar can advance locally.
+#[derive(Default)]
+struct MusicClock {
+    playing: bool,
+    position: f64,
+    at: f64,
+    duration: f64,
+    cover: String,
+}
+
 thread_local! {
     static STATE: RefCell<Option<UiState>> = const { RefCell::new(None) };
+    static MUSIC: RefCell<MusicClock> = RefCell::new(MusicClock::default());
+    /// Optimistic track change in flight: (title shown before the change, since). Music reports that still carry
+    /// the old title are ignored for a while so the screen does not flip back while MA loads the new stream.
+    static PENDING: RefCell<Option<(String, Instant)>> = const { RefCell::new(None) };
+    static HAPTIC: RefCell<Option<haptic::Haptic>> = const { RefCell::new(None) };
+}
+
+fn tick(level: usize) {
+    HAPTIC.with(|h| {
+        if let Some(h) = h.borrow_mut().as_mut() {
+            h.tick(level);
+        }
+    });
+}
+
+fn begin_pending(ui: &HubWindow, title: Option<&str>, artist: Option<&str>) {
+    let before = ui.get_music_title().to_string();
+    PENDING.with(|p| {
+        let mut p = p.borrow_mut();
+        let keep = p.as_ref().map(|(t, _)| t.clone()).unwrap_or(before);
+        *p = Some((keep, Instant::now()));
+    });
+    if let Some(t) = title {
+        ui.set_music_title(t.into());
+    }
+    if let Some(a) = artist {
+        ui.set_music_artist(a.into());
+    }
+    ui.set_music_loading(true);
+    ui.set_music_has_cover(false);
+    ui.set_music_state("playing".into());
+    ui.set_music_position(0.0);
+    MUSIC.with(|m| {
+        let mut m = m.borrow_mut();
+        m.position = 0.0;
+        m.at = now_s();
+        m.cover.clear();
+    });
+}
+
+fn load_image(path: &str) -> (slint::Image, bool) {
+    match (!path.is_empty()).then(|| slint::Image::load_from_path(std::path::Path::new(path))) {
+        Some(Ok(img)) => (img, true),
+        _ => (slint::Image::default(), false),
+    }
+}
+
+fn now_s() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
+
+fn music_position() -> f32 {
+    MUSIC.with(|m| {
+        let m = m.borrow();
+        let p = if m.playing && m.at > 0.0 { m.position + (now_s() - m.at) } else { m.position };
+        (if m.duration > 0.0 { p.min(m.duration) } else { p }).max(0.0) as f32
+    })
 }
 
 /// Rebuild the visible tiles from the last agent list + layout, updating rows in place when the order is
@@ -140,6 +208,97 @@ fn apply_agent_msg(ui: &HubWindow, link: &agent::AgentLink, m: Value) {
                 refresh_tiles(ui);
             }
         }
+        Some("music_pending") => {
+            begin_pending(ui, m["title"].as_str(), m["artist"].as_str());
+        }
+        Some("playlists") => {
+            let rows: Vec<PlaylistCard> = m["items"]
+                .as_array()
+                .map(|a| a.as_slice())
+                .unwrap_or_default()
+                .iter()
+                .map(|p| {
+                    let (cover, has_cover) = load_image(p["cover"].as_str().unwrap_or(""));
+                    PlaylistCard { name: p["name"].as_str().unwrap_or("").into(), cover, has_cover }
+                })
+                .collect();
+            ui.set_playlists(ModelRc::new(VecModel::from(rows)));
+        }
+        Some("upnext") => {
+            let rows: Vec<QueueRow> = m["items"]
+                .as_array()
+                .map(|a| a.as_slice())
+                .unwrap_or_default()
+                .iter()
+                .map(|q| {
+                    let (cover, has_cover) = load_image(q["cover"].as_str().unwrap_or(""));
+                    QueueRow {
+                        title: q["title"].as_str().unwrap_or("").into(),
+                        artist: q["artist"].as_str().unwrap_or("").into(),
+                        cover,
+                        has_cover,
+                        index: q["index"].as_i64().unwrap_or(-1) as i32,
+                    }
+                })
+                .collect();
+            ui.set_upnext(ModelRc::new(VecModel::from(rows)));
+        }
+        Some("sync") => {
+            ui.set_sync_state(m["state"].as_str().unwrap_or("").into());
+            ui.set_sync_text(m["text"].as_str().unwrap_or("").into());
+        }
+        Some("music") => {
+            let title = m["title"].as_str().unwrap_or("").to_string();
+            let stale = PENDING.with(|p| {
+                let mut p = p.borrow_mut();
+                match p.as_ref() {
+                    Some((old, since)) if *old == title && since.elapsed() < Duration::from_secs(25) => true,
+                    Some(_) => {
+                        *p = None;
+                        false
+                    }
+                    None => false,
+                }
+            });
+            ui.set_music_volume(m["volume"].as_f64().unwrap_or(0.0) as f32);
+            ui.set_music_shuffle(m["shuffle"].as_bool().unwrap_or(false));
+            if stale {
+                return; // still the old track: keep the optimistic screen
+            }
+            ui.set_music_loading(false);
+            let state = m["state"].as_str().unwrap_or("off").to_string();
+            ui.set_music_state(state.as_str().into());
+            ui.set_music_title(m["title"].as_str().unwrap_or("").into());
+            ui.set_music_artist(m["artist"].as_str().unwrap_or("").into());
+            ui.set_music_duration(m["duration"].as_f64().unwrap_or(0.0) as f32);
+            ui.set_music_volume(m["volume"].as_f64().unwrap_or(0.0) as f32);
+            let cover = m["cover"].as_str().unwrap_or("").to_string();
+            let changed = MUSIC.with(|c| {
+                let mut c = c.borrow_mut();
+                c.playing = state == "playing";
+                c.position = m["position"].as_f64().unwrap_or(0.0);
+                c.at = m["position_at"].as_f64().unwrap_or(0.0);
+                c.duration = m["duration"].as_f64().unwrap_or(0.0);
+                let changed = c.cover != cover;
+                c.cover = cover.clone();
+                changed
+            });
+            if changed {
+                match (!cover.is_empty()).then(|| slint::Image::load_from_path(std::path::Path::new(&cover))) {
+                    Some(Ok(img)) => {
+                        ui.set_music_cover(img);
+                        ui.set_music_has_cover(true);
+                    }
+                    _ => ui.set_music_has_cover(false),
+                }
+            }
+            ui.set_music_position(music_position());
+        }
+        Some("show") => {
+            if m["page"].as_str() == Some("music") {
+                ui.set_page(1);
+            }
+        }
         Some("voice") => {
             let state = m["state"].as_str().unwrap_or("idle");
             if std::env::var("HUB_DEBUG_LISTENING").is_err() {
@@ -153,10 +312,22 @@ fn apply_agent_msg(ui: &HubWindow, link: &agent::AgentLink, m: Value) {
 
 fn main() -> Result<(), slint::PlatformError> {
     let ui = HubWindow::new()?;
+    // Test hook: a one-shot $XDG_RUNTIME_DIR/razer-hub/start-page (0/1/2) opens that page on start, so a page can
+    // be screenshotted remotely (the touchscreen is the only pointer). The file is removed after reading.
+    let sp = std::path::Path::new(&std::env::var("XDG_RUNTIME_DIR").unwrap_or_default()).join("razer-hub/start-page");
+    if let Ok(s) = std::fs::read_to_string(&sp) {
+        match s.trim() {
+            "settings" => ui.set_settings_open(true),
+            p => ui.set_page(p.parse::<i32>().unwrap_or(0).clamp(0, 2)),
+        }
+        let _ = std::fs::remove_file(&sp);
+    }
     if std::env::var("HUB_WINDOWED").is_err() {
         ui.window().set_fullscreen(true);
     }
 
+    // 80 ms at full strength: the user felt 40-200 ms ticks and picked 80 ms (2026-11-11); 30 ms was not felt.
+    HAPTIC.with(|h| *h.borrow_mut() = haptic::Haptic::open());
     let idle = Duration::from_secs(env_u32("HUB_IDLE_SECS", 30) as u64);
     let bright_dim = env_u32("HUB_BRIGHT_DIM", 25);
     let settings = load_settings();
@@ -192,6 +363,7 @@ fn main() -> Result<(), slint::PlatformError> {
         ui.on_toggle_device(move |i| {
             let i = i as usize;
             if let Some(mut d) = model.row_data(i) {
+                tick(2); // device card: medium
                 log(&format!("tap tile {} ({})", i, d.id));
                 if link.send(json!({"cmd": "toggle", "id": d.id.as_str()})) {
                     d.on = !d.on; // optimistic; the HA state event confirms or reverts it
@@ -221,6 +393,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let (weak, model, link) = (ui.as_weak(), model.clone(), link.clone());
         ui.on_hide_device(move |i| {
             let Some(d) = model.row_data(i as usize) else { return };
+            tick(1); // hide: light
             log(&format!("hide tile {}", d.id));
             STATE.with(|s| {
                 if let Some(st) = s.borrow_mut().as_mut() {
@@ -238,6 +411,7 @@ fn main() -> Result<(), slint::PlatformError> {
         let (model, link) = (model.clone(), link.clone());
         ui.on_rename_device(move |i| {
             if let Some(d) = model.row_data(i as usize) {
+                tick(1); // rename: light
                 log(&format!("rename (dictation) {}", d.id));
                 link.send(json!({"cmd": "dictate", "id": d.id.as_str()}));
             }
@@ -473,10 +647,95 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
+    // ---- now playing: buttons go to the agent (Music Assistant via HA); progress advances locally -------
+    {
+        let (weak, link) = (ui.as_weak(), link.clone());
+        ui.on_music_cmd(move |op| {
+            // play/pause/next/prev: medium; shuffle toggle: light (sync ticks in the UI already)
+            match op.as_str() {
+                "shuffle" => tick(1),
+                "sync" => {}
+                _ => tick(2),
+            }
+            if let Some(ui) = weak.upgrade() {
+                if op == "next" || op == "previous" {
+                    // the agent follows up with music_pending (the queue's next title) within ~0.3 s
+                    begin_pending(&ui, Some(if op == "next" { "下一首…" } else { "上一首…" }), Some(""));
+                }
+            }
+            link.send(json!({"cmd": "music", "op": op.as_str()}));
+        });
+    }
+    {
+        let (weak, link) = (ui.as_weak(), link.clone());
+        ui.on_music_seek(move |s| {
+            tick(0); // seek released: selection tick
+            MUSIC.with(|m| {
+                let mut m = m.borrow_mut();
+                m.position = s as f64;
+                m.at = now_s();
+            });
+            if let Some(ui) = weak.upgrade() {
+                ui.set_music_position(s);
+            }
+            link.send(json!({"cmd": "music", "op": "seek", "value": s}));
+        });
+    }
+    ui.on_haptic(|level| tick(level.clamp(0, 3) as usize));
+    {
+        let (weak, link) = (ui.as_weak(), link.clone());
+        ui.on_play_playlist(move |i| {
+            tick(2);
+            if let Some(ui) = weak.upgrade() {
+                let name = ui.get_playlists().row_data(i as usize).map(|p| p.name.to_string()).unwrap_or_default();
+                begin_pending(&ui, Some(&name), Some("播放清單"));
+                ui.set_page(1);
+            }
+            link.send(json!({"cmd": "music", "op": "play_playlist", "value": i}));
+        });
+    }
+    {
+        let (weak, link) = (ui.as_weak(), link.clone());
+        ui.on_play_queue(move |index| {
+            tick(2);
+            if let Some(ui) = weak.upgrade() {
+                let row = (0..ui.get_upnext().row_count())
+                    .filter_map(|r| ui.get_upnext().row_data(r))
+                    .find(|q| q.index == index);
+                match row {
+                    Some(q) => begin_pending(&ui, Some(q.title.as_str()), Some(q.artist.as_str())),
+                    None => begin_pending(&ui, Some("下一首…"), Some("")),
+                }
+            }
+            link.send(json!({"cmd": "music", "op": "play_index", "value": index}));
+        });
+    }
+    {
+        let (weak, link) = (ui.as_weak(), link.clone());
+        ui.on_music_set_volume(move |v| {
+            if let Some(ui) = weak.upgrade() {
+                ui.set_music_volume(v);
+            }
+            link.send(json!({"cmd": "music", "op": "volume_set", "value": v}));
+        });
+    }
+    let music_timer = Timer::default();
+    {
+        let weak = ui.as_weak();
+        music_timer.start(TimerMode::Repeated, Duration::from_secs(1), move || {
+            if let Some(ui) = weak.upgrade() {
+                if ui.get_music_state() == "playing" {
+                    ui.set_music_position(music_position());
+                }
+            }
+        });
+    }
+
     // ---- voice: the agent owns the microphone; the button starts or cancels a command -----------------
     {
         let (weak, link) = (ui.as_weak(), link.clone());
         ui.on_mic_pressed(move || {
+            tick(2); // mic: medium
             let Some(ui) = weak.upgrade() else { return };
             let state = ui.get_voice_state();
             let cmd = if state == "listening" || state == "thinking" { "cancel" } else { "listen" };

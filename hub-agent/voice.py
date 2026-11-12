@@ -224,11 +224,18 @@ class Voice:
 
     # ----------------------------------------------------------------- private
     def _mic(self):
+        """Echo-cancelled mic from PipeWire (razer_aec_source, see pipewire-razer-aec.conf) so the wake word works
+        while the speakers play music; HUB_MIC_DEVICE=hw:0,1 reads the raw DMIC directly instead."""
         subprocess.run(["sudo", "-n", "/usr/local/sbin/razer-mic-setup", "mono", "96"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return subprocess.Popen(["arecord", "-q", "-D", "hw:0,1", "-f", "S16_LE", "-r", "48000", "-c", "1",
+        dev = os.environ.get("HUB_MIC_DEVICE", "pipewire")
+        env = dict(os.environ)
+        if dev == "pipewire":
+            env["PIPEWIRE_NODE"] = os.environ.get("HUB_MIC_NODE", "razer_aec_source")
+        self.log(f"microphone: {dev} {env.get('PIPEWIRE_NODE', '')}")
+        return subprocess.Popen(["arecord", "-q", "-D", dev, "-f", "S16_LE", "-r", "48000", "-c", "1",
                                  "-t", "raw", "--buffer-time=200000"],
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 
     def _run(self):
         while True:

@@ -7,10 +7,8 @@ Description=Razer hub kiosk (sway + Slint hub UI)
 [Service]
 Environment=LIBSEAT_BACKEND=seatd
 Environment=WLR_NO_HARDWARE_CURSORS=1
-# Partial (damage-tracked) repaints leave a 1-px stale column at the edge of the damaged area with transform 90 +
-# scale 2 (a vertical line beside the animating mic button, 2026-11-10; not visible in grim screenshots).
-# Re-render the whole output on every frame; frames are only produced while something animates.
-Environment=WLR_SCENE_DEBUG_DAMAGE=rerender
+# (WLR_SCENE_DEBUG_DAMAGE=rerender was tried against the white line beside the mic button; it did not help -
+#  the line is below the compositor - and it made every frame a full repaint, so it was removed 2026-11-11.)
 # The Phosh debug desktop imports LANGUAGE=zh_TW into the user manager; keep the kiosk untranslated.
 UnsetEnvironment=LANGUAGE SLINT_DEBUG_PERFORMANCE
 ExecStart=/usr/bin/dbus-run-session -- /usr/bin/sway -c %h/.config/razer-hub/sway.conf

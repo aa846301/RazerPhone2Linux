@@ -1,0 +1,19 @@
+# User unit (klipper): makes the hub a Music Assistant player (Sendspin protocol, official client from the Open Home
+# Foundation, PyPI "sendspin" in ~/sendspin-venv). Music Assistant finds it via mDNS (_sendspin._tcp, port 8928).
+# Audio goes through PipeWire so it mixes with chimes and can be echo-cancelled / ducked by the hub agent.
+# Install: ~/.config/systemd/user/razer-sendspin.service ; systemctl --user enable --now razer-sendspin
+[Unit]
+Description=Razer hub Music Assistant player (Sendspin)
+After=pipewire.service network-online.target
+
+[Service]
+# Connect out to Music Assistant's Sendspin server (it did not dial in to the mDNS-advertised client here, 2026-11-11).
+# Override the URL in ~/.config/razer-hub/sendspin.env (SENDSPIN_URL=ws://<music-assistant-host>:8927/sendspin).
+Environment=SENDSPIN_URL=ws://192.168.10.185:8927/sendspin
+EnvironmentFile=-%h/.config/razer-hub/sendspin.env
+ExecStart=%h/sendspin-venv/bin/sendspin daemon --url ${SENDSPIN_URL} --name "Razer 中控台" --audio-device pipewire --settings-dir %h/.config/razer-hub/sendspin --hardware-volume false
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

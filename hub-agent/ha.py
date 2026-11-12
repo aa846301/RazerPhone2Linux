@@ -34,10 +34,20 @@ class HA:
         with self.lock:
             return dict(self.states), dict(self.areas), dict(self.entities), dict(self.devices), self.connected
 
-    def call_service(self, domain, service, entity_id, data=None, timeout=8):
-        msg = {"type": "call_service", "domain": domain, "service": service,
-               "target": {"entity_id": entity_id}, "service_data": data or {}}
+    def call_service(self, domain, service, entity_id=None, data=None, timeout=8, return_response=False):
+        msg = {"type": "call_service", "domain": domain, "service": service, "service_data": data or {}}
+        if entity_id:
+            msg["target"] = {"entity_id": entity_id}
+        if return_response:
+            msg["return_response"] = True
         return self._request(msg, timeout)
+
+    def config_entry_id(self, domain, timeout=8):
+        """First config entry of an integration (Music Assistant services need it)."""
+        for e in self._request({"type": "config_entries/get", "domain": domain}, timeout) or []:
+            if e.get("state") == "loaded":
+                return e["entry_id"]
+        return None
 
     # ----------------------------------------------------------------- private
     def _request(self, msg, timeout):
